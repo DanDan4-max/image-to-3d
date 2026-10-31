@@ -23,6 +23,7 @@ import picture_ai
 import pipeline
 import symmetry
 import trellis_engine
+import web_search
 
 WEB = Path(__file__).resolve().parent / "web"
 UPLOADS = pipeline.OUTPUT / ".uploads"
@@ -92,6 +93,8 @@ def worker():
             else:
                 free_triposr()  # TRELLIS.2 at full detail wants the whole 16 GB
                 r = trellis_engine.generate(job["upload"], res=int(job["engine"].split("-")[1]), size=job["size"], **common)
+            if job.get("credit"):
+                add_credit(r.folder, job["credit"])
             job.update(state="done", result=summary(r.folder))
         except Exception as e:
             traceback.print_exc()
@@ -100,6 +103,20 @@ def worker():
             for f in (job.get("upload"), job.get("mask")):
                 if f:
                     Path(f).unlink(missing_ok=True)
+
+
+def add_credit(folder, credit):
+    """Where a web picture came from and its license, for license.txt (needed to use most free pictures)."""
+    lic = folder / "license.txt"
+    lines = lic.read_text(encoding="utf-8").splitlines() if lic.exists() else []
+    lines.insert(min(3, len(lines)), f"* picture from:\t{credit}")
+    lines.append("* Credit the picture's creator wherever you use this model. A license with SA (share-alike) also "
+                 "means the model must be shared under that same license.")
+    lic.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    info = folder / "info.json"
+    meta = json.loads(info.read_text(encoding="utf-8")) if info.exists() else {}
+    meta["credit"] = credit
+    info.write_text(json.dumps(meta), encoding="utf-8")
 
 
 def queue_job(**fields):
@@ -176,6 +193,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, status())
         if p == "/api/recent":
             return self._send(200, recent())
+        if p == "/api/search":
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try:
+                return self._send(200, web_search.search(q.get("q", ""), q.get("source", "commons")))
+            except Exception as e:
+                name = "Openverse" if q.get("source") == "openverse" else "Wikimedia Commons"
+                return self._send(502, {"error": f"{name} isn't answering right now ({type(e).__name__}). "
+                                                 "Try the other source, or search in your browser."})
         if p.startswith("/api/jobs/"):
             job = jobs.get(p[len("/api/jobs/"):])
             if not job:
@@ -229,9 +254,19 @@ class Handler(BaseHTTPRequestHandler):
             queue_job(
                 id=job_id, kind="model", name=(q.get("name") or "model")[:60], engine=engine,
                 size="full" if q.get("size") == "full" else "game", remove_bg=q.get("remove_bg", "1") != "0",
-                upload=str(upload), source_name=q.get("filename", "")[:120],
+                upload=str(upload), source_name=q.get("filename", "")[:120], credit=q.get("credit", "")[:400],
                 cutout=cutout_file(q.get("cutout")) if q.get("remove_bg", "1") != "0" else None)
             return self._send(200, {"id": job_id})
+        if url.path == "/api/fetch":
+            size = int(self.headers.get("Content-Length") or 0)
+            try:
+                link = json.loads(self.rfile.read(size)).get("url", "") if 0 < size < 10000 else ""
+                data, kind = web_search.fetch_image(str(link))
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:
+                return self._send(502, {"error": f"Couldn't download that picture ({type(e).__name__})."})
+            return self._send(200, data, kind)
         if url.path in ("/api/imagine", "/api/edit"):
             if not picture_ai.available():
                 return self._send(400, {"error": "The picture AI isn't installed. Run Setup.bat."})

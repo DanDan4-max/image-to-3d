@@ -71,16 +71,21 @@ function show(folder, file = 'model.glb', keepView = false) {
 // ---------- picking a picture ----------
 // Right after a picture is picked, the server cuts the object out (about 10 s) and the page shows exactly what the
 // AI will get, so a bad cut-out (say, tire bottoms hidden in grass) is caught before a 5-minute run.
-let picked = null, pickedUrl = null, cutout = null, cutting = 0;
-function pick(file) {
+let picked = null, pickedUrl = null, pickedCredit = '', cutout = null, cutting = 0;
+// credit: where a web picture came from and its license; it goes into the model's license.txt
+function pick(file, credit = '') {
   if (!file || !file.type.startsWith('image/')) return showError("That file isn't a picture. Use a PNG, JPG or WEBP image.");
   picked = file;
   pickedUrl = URL.createObjectURL(file);
+  pickedCredit = credit;
   $('picked').hidden = false;
   $('dropText').hidden = true;
   $('name').value = (file.name || 'pasted').replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase().slice(0, 60);
   $('error').hidden = true;
+  $('pictureTools').hidden = false;
   $('fixPicture').hidden = !canDraw();
+  $('creditText').hidden = !credit;
+  $('creditText').textContent = credit ? 'Picture: ' + credit : '';
   cutout = null;
   refreshCutout();
 }
@@ -128,12 +133,42 @@ $('file').addEventListener('change', (e) => pick(e.target.files[0]));
 const drop = $('drop');
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
 drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); pick(e.dataTransfer.files[0]); });
+drop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  drop.classList.remove('over');
+  const file = [...e.dataTransfer.files].find((f) => f.type.startsWith('image/'));
+  if (file) return pick(file);
+  // a picture dragged from a web page often arrives as just its address
+  const link = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '').split('\n')[0].trim();
+  if (link) pickFromWeb(link);
+});
 drop.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') $('file').click(); });
 window.addEventListener('paste', (e) => {
+  if (e.target.closest && e.target.closest('input, textarea')) return;  // typing in a box: leave it alone
   const item = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'));
-  if (item) pick(item.getAsFile());
+  if (item) return pick(item.getAsFile());
+  const text = e.clipboardData.getData('text/plain').trim();
+  if (/^https?:\/\/\S+$/i.test(text)) pickFromWeb(text);
 });
+
+async function pickFromWeb(link, credit = '', name = '') {
+  if (!/^https?:\/\//i.test(link)) return showError("That isn't a picture or a link to one.");
+  $('error').hidden = true;
+  $('dropText').hidden = false;
+  $('dropText').textContent = 'Getting the picture…';
+  try {
+    const r = await fetch('/api/fetch', { method: 'POST', headers: { 'X-Image-To-3D': '1' }, body: JSON.stringify({ url: link }) });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
+    const blob = await r.blob();
+    const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp' }[blob.type] || 'png';
+    const base = name || decodeURIComponent(new URL(link).pathname.split('/').pop() || 'web-picture').replace(/\.\w+$/, '');
+    pick(new File([blob], `${slug(base)}.${ext}`, { type: blob.type }), credit || link);
+  } catch (e) {
+    if (!picked) $('dropText').textContent = 'Drop a picture here, click to pick one, or paste with Ctrl+V';
+    else $('dropText').hidden = true;
+    showError(e.message);
+  }
+}
 
 // ---------- status ----------
 let status = {};
@@ -176,6 +211,7 @@ $('go').addEventListener('click', async () => {
     remove_bg: $('removeBg').checked ? '1' : '0', filename: picked.name || 'pasted.png',
   });
   if ($('removeBg').checked && cutout && cutout.file === picked && cutout.id) q.set('cutout', cutout.id);
+  if (pickedCredit) q.set('credit', pickedCredit);
   try {
     const { id } = await api('/api/jobs?' + q, { method: 'POST', body: picked, headers: { 'Content-Type': picked.type } });
     for (;;) {
@@ -294,17 +330,119 @@ async function urlToFile(url, name) {
 }
 
 // ---------- prompt mode: words -> picture (then the usual picture -> 3D) ----------
-function showTab(words) {
-  $('tabWords').classList.toggle('on', words);
-  $('tabPicture').classList.toggle('on', !words);
-  $('wordsBox').hidden = !words;
-  $('dropText').textContent = words
-    ? 'Your drawn picture will show up here'
-    : 'Drop a picture here, click to pick one, or paste with Ctrl+V';
-  if (words) $('prompt').focus();
+function showTab(name) {
+  for (const [tab, t] of [['picture', 'tabPicture'], ['words', 'tabWords'], ['web', 'tabWeb']]) $(t).classList.toggle('on', tab === name);
+  $('wordsBox').hidden = name !== 'words';
+  $('webBox').hidden = name !== 'web';
+  $('dropText').textContent = {
+    words: 'Your drawn picture will show up here',
+    web: 'Click a search result, or drag a picture here from a web page',
+  }[name] || 'Drop a picture here, click to pick one, or paste with Ctrl+V';
+  if (name === 'words') $('prompt').focus();
+  if (name === 'web') $('webQuery').focus();
 }
-$('tabPicture').addEventListener('click', () => showTab(false));
-$('tabWords').addEventListener('click', () => showTab(true));
+$('tabPicture').addEventListener('click', () => showTab('picture'));
+$('tabWords').addEventListener('click', () => showTab('words'));
+$('tabWeb').addEventListener('click', () => showTab('web'));
+
+// ---------- from the web: free-to-use picture search, plus links out to Google / Bing ----------
+let searchTicket = 0;
+async function webSearch() {
+  const q = $('webQuery').value.trim();
+  if (!q) return $('webQuery').focus();
+  const source = document.querySelector('input[name=webSource]:checked').value;
+  $('googleLink').href = 'https://www.google.com/search?tbm=isch&q=' + encodeURIComponent(q);
+  $('bingLink').href = 'https://www.bing.com/images/search?q=' + encodeURIComponent(q);
+  const ticket = ++searchTicket, box = $('webResults');
+  $('webText').textContent = 'Searching…';
+  try {
+    const list = await api(`/api/search?source=${source}&q=${encodeURIComponent(q)}`);
+    if (ticket !== searchTicket) return;
+    box.replaceChildren(...list.map((r) => {
+      const card = document.createElement('button');
+      card.type = 'button';
+      card.className = 'web-card';
+      card.title = `${r.title}${r.creator ? ' by ' + r.creator : ''} (${r.license})`;
+      const img = document.createElement('img');
+      img.src = r.thumb;
+      img.alt = r.title;
+      img.loading = 'lazy';
+      img.referrerPolicy = 'no-referrer';
+      const tag = document.createElement('span');
+      tag.textContent = r.license;
+      card.append(img, tag);
+      card.addEventListener('click', () => {
+        for (const c of box.children) c.classList.toggle('on', c === card);
+        const credit = `"${r.title}"${r.creator ? ' by ' + r.creator : ''}, ${r.license}, ${r.source}: ${r.page || r.url}`;
+        pickFromWeb(r.url, credit, r.title);
+      });
+      return card;
+    }));
+    $('webText').textContent = list.length
+      ? 'Click a picture to use it. The license is on each one; its credit goes into the model\'s license.txt.'
+      : 'Nothing found. Try other words, or search Google or Bing below.';
+  } catch (e) {
+    if (ticket === searchTicket) { box.replaceChildren(); $('webText').textContent = e.message; }
+  }
+}
+$('webForm').addEventListener('submit', (e) => { e.preventDefault(); webSearch(); });
+for (const r of document.querySelectorAll('input[name=webSource]')) r.addEventListener('change', () => $('webQuery').value.trim() && webSearch());
+
+// ---------- cut out one part (crop) ----------
+const crImage = $('crImage'), crBox = $('crBox');
+const cr = { box: null, start: null, name: 'model' };
+async function openCropper(src, name) {
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  for (const c of [crImage, crBox]) { c.width = img.naturalWidth; c.height = img.naturalHeight; }
+  crImage.getContext('2d').drawImage(img, 0, 0);
+  cr.box = null;
+  cr.name = name;
+  drawCropBox();
+  $('cropper').hidden = false;
+}
+function cropPoint(e) {
+  const r = crBox.getBoundingClientRect();
+  return [Math.min(Math.max((e.clientX - r.left) * crBox.width / r.width, 0), crBox.width),
+    Math.min(Math.max((e.clientY - r.top) * crBox.height / r.height, 0), crBox.height)];
+}
+function drawCropBox() {
+  const g = crBox.getContext('2d');
+  g.clearRect(0, 0, crBox.width, crBox.height);
+  const b = cr.box;
+  const ok = b && b[2] - b[0] > 16 && b[3] - b[1] > 16;
+  $('crUse').disabled = !ok;
+  $('crSize').textContent = ok ? `${Math.round(b[2] - b[0])} × ${Math.round(b[3] - b[1])} pixels` : '';
+  if (!b) return;
+  g.fillStyle = 'rgba(5, 7, 10, 0.6)';  // darken everything outside the box
+  g.fillRect(0, 0, crBox.width, crBox.height);
+  g.clearRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
+  g.strokeStyle = '#3d8bff';
+  g.lineWidth = Math.max(2, crBox.width / 300);
+  g.strokeRect(b[0], b[1], b[2] - b[0], b[3] - b[1]);
+}
+crBox.addEventListener('pointerdown', (e) => { cr.start = cropPoint(e); crBox.setPointerCapture(e.pointerId); });
+crBox.addEventListener('pointermove', (e) => {
+  if (!cr.start) return;
+  const [x, y] = cropPoint(e), [sx, sy] = cr.start;
+  cr.box = [Math.min(x, sx), Math.min(y, sy), Math.max(x, sx), Math.max(y, sy)];
+  drawCropBox();
+});
+crBox.addEventListener('pointerup', () => { cr.start = null; });
+$('crClose').addEventListener('click', () => { $('cropper').hidden = true; });
+$('cropper').addEventListener('keydown', (e) => { if (e.key === 'Escape') $('cropper').hidden = true; });
+$('crUse').addEventListener('click', async () => {
+  const [x0, y0, x1, y1] = cr.box.map(Math.round);
+  const c = document.createElement('canvas');
+  c.width = x1 - x0;
+  c.height = y1 - y0;
+  c.getContext('2d').drawImage(crImage, x0, y0, c.width, c.height, 0, 0, c.width, c.height);
+  const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+  $('cropper').hidden = true;
+  pick(new File([blob], cr.name + '-part.png', { type: 'image/png' }), pickedCredit);
+});
+$('cropPicture').addEventListener('click', () => picked && openCropper(pickedUrl, $('name').value || 'model'));
 
 $('draw').addEventListener('click', async () => {
   const prompt = $('prompt').value.trim();
@@ -441,8 +579,8 @@ $('edUndo').addEventListener('click', async () => {
 $('edUse').addEventListener('click', async () => {
   const blob = await new Promise((r) => edImage.toBlob(r, 'image/png'));
   closeEditor();
-  showTab(false);
-  pick(new File([blob], ed.name + '-fixed.png', { type: 'image/png' }));
+  showTab('picture');
+  pick(new File([blob], ed.name + '-fixed.png', { type: 'image/png' }), pickedCredit);
   $('drop').scrollIntoView({ block: 'nearest' });
 });
 

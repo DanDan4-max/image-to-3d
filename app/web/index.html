@@ -18,6 +18,26 @@
       <div class="tabs" role="tablist">
         <button id="tabPicture" class="tab on" role="tab">From a picture</button>
         <button id="tabWords" class="tab" role="tab">From words</button>
+        <button id="tabWeb" class="tab" role="tab">From the web</button>
+      </div>
+
+      <div id="webBox" class="words" hidden>
+        <form id="webForm" class="row">
+          <input id="webQuery" type="text" maxlength="200" placeholder="Search for a picture, e.g. “golden trophy”">
+          <button class="button">Search</button>
+        </form>
+        <div class="row muted">
+          Free-to-use pictures from
+          <label><input type="radio" name="webSource" value="commons" checked> Wikimedia</label>
+          <label><input type="radio" name="webSource" value="openverse"> Openverse</label>
+        </div>
+        <div id="webResults" class="web-results"></div>
+        <p id="webText" class="muted"></p>
+        <p class="muted">Not there? Search
+          <a id="googleLink" href="https://www.google.com/imghp" target="_blank" rel="noopener">Google Images</a> or
+          <a id="bingLink" href="https://www.bing.com/images" target="_blank" rel="noopener">Bing Images</a>,
+          then drag the picture onto the box below, or right-click it, choose <b>Copy image</b>, and press Ctrl+V here.
+          Check you're allowed to use pictures you find there.</p>
       </div>
 
       <div id="wordsBox" class="words" hidden>
@@ -35,7 +55,11 @@
         <span id="dropText">Drop a picture here, click to pick one, or paste with Ctrl+V</span>
       </label>
       <p id="cutHint" class="cut-hint" hidden></p>
-      <button id="fixPicture" class="button" hidden>Highlight and fix part of this picture</button>
+      <div id="pictureTools" class="row" hidden>
+        <button id="cropPicture" class="button">Cut out one part</button>
+        <button id="fixPicture" class="button">Highlight and fix</button>
+      </div>
+      <p id="creditText" class="muted" hidden></p>
 
       <div class="field">
         <label for="name">Name</label>
@@ -139,6 +163,25 @@
       <div class="row end">
         <button id="edFix" class="button">Fix it</button>
         <button id="edUse" class="primary">Use this picture</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="cropper" class="editor" hidden>
+    <div class="editor-box" role="dialog" aria-label="Cut out one part">
+      <div class="editor-head">
+        <h2>Cut out one part</h2>
+        <button id="crClose" class="link">Close</button>
+      </div>
+      <p class="muted">Drag a box around just the thing you want. Only that part will be used, and its background gets
+        removed after.</p>
+      <div class="ed-stage">
+        <canvas id="crImage"></canvas>
+        <canvas id="crBox"></canvas>
+      </div>
+      <div class="row end">
+        <span id="crSize" class="muted"></span>
+        <button id="crUse" class="primary" disabled>Use this part</button>
       </div>
     </div>
   </div>

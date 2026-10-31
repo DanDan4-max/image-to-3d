@@ -1,6 +1,6 @@
 # Image to 3D
 
-Turn a picture, or a few words, into a colored 3D model (`.glb`) on your own PC. It's free, has no limits, and works offline once it's set up.
+Turn a picture, or a few words, into a colored 3D model (`.glb`) on your own PC. It's free, has no limits, and works offline once it's set up (only the web search needs the internet).
 
 ## How to use it
 
@@ -12,6 +12,16 @@ Turn a picture, or a few words, into a colored 3D model (`.glb`) on your own PC.
 Keep the black window open while you use the page. Close it to quit.
 
 Prefer no browser? Drag pictures onto **`Make 3D.bat`**, or double-click it to pick pictures.
+
+### Finding a picture on the web
+
+Click the **From the web** tab, type what you're looking for, and press **Search**. You get free-to-use pictures from Wikimedia Commons (or Openverse), each tagged with its license. Click one to use it, and its creator and license are written into the model's `license.txt`, so you can credit them.
+
+Can't find it there? The **Google Images** and **Bing Images** links open the same search in your browser. Drag a picture from there onto the picture box, or right-click it, choose **Copy image**, and press Ctrl+V in the app. Pasting a link to a picture works too. Pictures from Google or Bing can be anyone's, so check you're allowed to use them. (The app can't show Google or Bing results itself: neither offers free image search to apps any more.)
+
+### Cutting out one part of a picture
+
+If a picture has more than you want (a statue on a busy street, two dragons when you want one), click **Cut out one part** under the picture and drag a box around just the thing you want. Only that part gets used, and its background is removed after.
 
 ### Making a model from words (prompt mode)
 
