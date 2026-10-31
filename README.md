@@ -1,6 +1,6 @@
 # Image to 3D
 
-Turn a picture into a colored 3D model (`.glb`) on your own PC. It's free, has no limits, and works offline once it's set up.
+Turn a picture, or a few words, into a colored 3D model (`.glb`) on your own PC. It's free, has no limits, and works offline once it's set up.
 
 ## How to use it
 
@@ -12,6 +12,17 @@ Turn a picture into a colored 3D model (`.glb`) on your own PC. It's free, has n
 Keep the black window open while you use the page. Close it to quit.
 
 Prefer no browser? Drag pictures onto **`Make 3D.bat`**, or double-click it to pick pictures.
+
+### Making a model from words (prompt mode)
+
+Click the **From words** tab, describe the thing (e.g. "a glowing blue dragon head", "a golden trophy with wings"), and click **Draw it**. In about 15 seconds the picture AI draws it on a plain background, ready for 3D. Don't like it? Click **Draw again** for a new one. Then click **Make 3D model** as usual.
+
+### Highlight and fix
+
+- **Fix part of a picture:** under the picture, click **Highlight and fix part of this picture**. Paint over what's wrong with the brush, type what it should be ("complete black tires, no grass", "make the ball glow blue"), and click **Fix it**. About 25 seconds later only the painted part has changed. **Undo fix** goes back. Click **Use this picture** when it looks right.
+- **Fix part of a 3D model:** turn the model so the problem shows, click **Highlight and fix it**, and fix the snapshot the same way. **Use this picture** then makes a new model from the fixed view.
+
+This is how to rescue a picture where something is hidden. For example, paint over tire bottoms hidden in grass and ask for complete tires.
 
 ### AI model choices
 
@@ -58,6 +69,7 @@ Not on one PC. These models learned from hundreds of thousands of 3D objects on 
 Training an image-to-3D AI from scratch isn't something one PC can do, so this is your own open-source app built around existing open models:
 
 - **TRELLIS.2** (Microsoft, **MIT license**), run through **trellis.cpp** (pwilkin, MIT), a C++ port that runs on AMD cards through Vulkan with no CUDA needed. Weights: the Q8 GGUF files from `ilintar/trellis2-gguf`. TRELLIS.2 reads pictures with Meta's **DINOv3** image encoder, which has its own DINOv3 License (free to use, including commercially, under Meta's terms), and removes backgrounds with **BiRefNet** (MIT).
+- **FLUX.2 [klein] 4B** (Black Forest Labs, **Apache 2.0**) draws pictures from words and redraws highlighted parts, with **Qwen3-4B** (Alibaba, Apache 2.0) reading the words. It runs through **stable-diffusion.cpp** (leejet, MIT) on Vulkan. On Radeon RX 9000 cards that build's Vulkan code turns the compressed (Q8) weights into noise, so the app has it convert them to F16 while loading.
 - **TripoSR** (Tripo AI and Stability AI, **MIT license**) for quick drafts, run with AMD's PyTorch for Windows (ROCm 7.2.1). Background removal uses **u2net** through `rembg` (MIT and Apache-2.0).
 - The 3D preview uses **three.js** (MIT).
 
@@ -68,13 +80,14 @@ The tool's own code is MIT licensed (see `LICENSE`). The models you make are you
 ## Setup
 
 1. Get the code from https://github.com/DanDan4-max/image-to-3d: click **Code → Download ZIP** and unzip it, or run `git clone https://github.com/DanDan4-max/image-to-3d.git`.
-2. Double-click **`Setup.bat`**. It needs Windows, an AMD Radeon card, Python 3.12, an AMD graphics driver 26.2.2 or newer, and about 25 GB of free disk space. It downloads about 15 GB.
+2. Double-click **`Setup.bat`**. It needs Windows, an AMD Radeon card, Python 3.12, an AMD graphics driver 26.2.2 or newer, and about 35 GB of free disk space. It downloads about 24 GB.
 
 Keep this folder outside OneDrive, because the model files are big.
 
 What's where:
 - `app\`: the tool's own code (the page, the server, and the two AI engines).
 - `engines\trellis\`: trellis.cpp (TRELLIS.2 for Vulkan).
+- `engines\sdcpp\`: stable-diffusion.cpp (the picture AI for Vulkan).
 - `vendor\TripoSR\`: TripoSR's code.
-- `models\`: the AI weights (about 12 GB).
+- `models\`: the AI weights (about 21 GB).
 - `output\`: your models.

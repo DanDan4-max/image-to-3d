@@ -80,6 +80,7 @@ function pick(file) {
   $('dropText').hidden = true;
   $('name').value = (file.name || 'pasted').replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase().slice(0, 60);
   $('error').hidden = true;
+  $('fixPicture').hidden = !canDraw();
   cutout = null;
   refreshCutout();
 }
@@ -146,6 +147,8 @@ async function poll() {
       const ok = status.engines[input.value.split('-')[0]];
       input.disabled = ok === false;
     }
+    $('tabWords').disabled = !canDraw();
+    $('tabWords').title = canDraw() ? '' : "The picture AI isn't installed. Run Setup.bat.";
   } catch {
     $('status').textContent = 'The app window was closed. Start it again with Start Image to 3D.bat';
     $('status').className = 'pill bad';
@@ -156,6 +159,7 @@ setInterval(poll, 3000);
 poll();
 
 let busy = false;
+function canDraw() { return !!(status.engines && status.engines.pictures); }
 function updateButton() { $('go').disabled = !picked || busy || !status.ready || (cutting && $('removeBg').checked); }
 function showError(msg) { $('error').textContent = msg; $('error').hidden = false; }
 
@@ -206,6 +210,7 @@ function done(r) {
   $('resultPath').textContent = r.path;
   $('download').href = `/files/${encodeURIComponent(r.folder)}/model.glb`;
   $('download').download = `${r.folder}.glb`;
+  $('fixModelBar').hidden = !canDraw();
   $('mirrorBar').hidden = false;
   $('mirrorBtn').hidden = false;
   $('mirrorPick').hidden = true;
@@ -270,3 +275,192 @@ async function loadGallery() {
   if (!list.length) g.textContent = 'Nothing yet. Your models will appear here.';
 }
 loadGallery();
+
+// ---------- shared: waiting on a GPU job ----------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitJob(id, onStep) {
+  for (;;) {
+    await sleep(700);
+    const job = await api('/api/jobs/' + id);
+    onStep(job);
+    if (job.state === 'done') return job.result;
+    if (job.state === 'error') throw new Error(job.error);
+  }
+}
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').split('-').slice(0, 5).join('-') || 'model';
+async function urlToFile(url, name) {
+  const blob = await (await fetch(url)).blob();
+  return new File([blob], name, { type: blob.type || 'image/png' });
+}
+
+// ---------- prompt mode: words -> picture (then the usual picture -> 3D) ----------
+function showTab(words) {
+  $('tabWords').classList.toggle('on', words);
+  $('tabPicture').classList.toggle('on', !words);
+  $('wordsBox').hidden = !words;
+  $('dropText').textContent = words
+    ? 'Your drawn picture will show up here'
+    : 'Drop a picture here, click to pick one, or paste with Ctrl+V';
+  if (words) $('prompt').focus();
+}
+$('tabPicture').addEventListener('click', () => showTab(false));
+$('tabWords').addEventListener('click', () => showTab(true));
+
+$('draw').addEventListener('click', async () => {
+  const prompt = $('prompt').value.trim();
+  if (!prompt) return $('prompt').focus();
+  const b = $('draw');
+  b.disabled = true;
+  $('error').hidden = true;
+  try {
+    const { id } = await api('/api/imagine', { method: 'POST', body: JSON.stringify({ prompt, seed: -1 }) });
+    const r = await waitJob(id, (job) => { $('drawText').textContent = job.step; });
+    pick(await urlToFile(r.image, slug(prompt) + '.png'));
+    $('drawText').textContent = "Not quite right? Click Draw again for a new one, or fix part of it below.";
+    b.textContent = 'Draw again';
+  } catch (e) {
+    $('drawText').textContent = '';
+    showError(e.message);
+  }
+  b.disabled = false;
+});
+$('prompt').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('draw').click(); } });
+
+// ---------- highlight and fix ----------
+// Paint over what's wrong, say what it should be; the picture AI redraws just that area. Works on the picked picture,
+// or on a snapshot of the 3D model from the angle it's shown at (the fixed picture then makes a new model).
+const ed = { name: 'model', history: [], erasing: false, painting: false, last: null };
+const edImage = $('edImage'), edMask = $('edMask');
+
+async function openEditor(src, name) {
+  const img = new Image();
+  img.src = src;
+  await img.decode();
+  const s = Math.min(1, 2048 / Math.max(img.width, img.height));
+  const w = Math.round(img.width * s), h = Math.round(img.height * s);
+  for (const c of [edImage, edMask]) { c.width = w; c.height = h; }
+  const g = edImage.getContext('2d');
+  g.fillStyle = '#c8c8c8';  // see-through parts (a 3D snapshot) on plain light gray, which the AIs handle well
+  g.fillRect(0, 0, w, h);
+  g.drawImage(img, 0, 0, w, h);
+  edMask.getContext('2d').clearRect(0, 0, w, h);
+  ed.name = name;
+  ed.history = [];
+  $('edPrompt').value = '';
+  $('edUndo').disabled = true;
+  $('edError').hidden = true;
+  $('edBusy').hidden = true;
+  $('editor').hidden = false;
+  $('edPrompt').focus();
+}
+const closeEditor = () => { $('editor').hidden = true; };
+$('edClose').addEventListener('click', closeEditor);
+$('editor').addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEditor(); });
+
+function brushAt(e) {
+  const r = edMask.getBoundingClientRect();
+  return [(e.clientX - r.left) * edMask.width / r.width, (e.clientY - r.top) * edMask.height / r.height,
+    Number($('edBrush').value) * edMask.width / r.width];
+}
+function paint(e) {
+  const [x, y, size] = brushAt(e);
+  const g = edMask.getContext('2d');
+  g.globalCompositeOperation = ed.erasing ? 'destination-out' : 'source-over';
+  g.strokeStyle = g.fillStyle = '#ff3355';
+  g.lineWidth = size;
+  g.lineCap = 'round';
+  g.beginPath();
+  if (ed.last) { g.moveTo(...ed.last); g.lineTo(x, y); g.stroke(); }
+  g.arc(x, y, size / 2, 0, Math.PI * 2);
+  g.fill();
+  ed.last = [x, y];
+}
+edMask.addEventListener('pointerdown', (e) => { ed.painting = true; ed.last = null; edMask.setPointerCapture(e.pointerId); paint(e); });
+edMask.addEventListener('pointermove', (e) => { if (ed.painting) paint(e); });
+edMask.addEventListener('pointerup', () => { ed.painting = false; ed.last = null; });
+$('edErase').addEventListener('click', () => {
+  ed.erasing = !ed.erasing;
+  $('edErase').classList.toggle('on', ed.erasing);
+  $('edErase').textContent = ed.erasing ? 'Eraser (on)' : 'Eraser';
+});
+$('edClear').addEventListener('click', () => edMask.getContext('2d').clearRect(0, 0, edMask.width, edMask.height));
+
+function maskDataUrl() {
+  // the painted strokes as a plain black-and-white mask, or null if nothing is painted
+  const src = edMask.getContext('2d').getImageData(0, 0, edMask.width, edMask.height);
+  const out = new ImageData(src.width, src.height);
+  let any = false;
+  for (let i = 0; i < src.data.length; i += 4) {
+    const on = src.data[i + 3] > 0;
+    any = any || on;
+    out.data[i] = out.data[i + 1] = out.data[i + 2] = on ? 255 : 0;
+    out.data[i + 3] = 255;
+  }
+  if (!any) return null;
+  const c = document.createElement('canvas');
+  c.width = src.width; c.height = src.height;
+  c.getContext('2d').putImageData(out, 0, 0);
+  return c.toDataURL('image/png');
+}
+
+$('edFix').addEventListener('click', async () => {
+  const prompt = $('edPrompt').value.trim();
+  if (!prompt) return $('edPrompt').focus();
+  $('edError').hidden = true;
+  $('edBusy').hidden = false;
+  $('edStep').textContent = 'Sending…';
+  $('edBar').style.width = '2%';
+  for (const b of ['edFix', 'edUse', 'edUndo']) $(b).disabled = true;
+  const before = edImage.toDataURL('image/png');
+  try {
+    const { id } = await api('/api/edit', { method: 'POST', body: JSON.stringify({ prompt, image: before, mask: maskDataUrl(), seed: -1 }) });
+    const r = await waitJob(id, (job) => { $('edStep').textContent = job.step; $('edBar').style.width = `${Math.round(job.progress * 100)}%`; });
+    const img = new Image();
+    img.src = r.image;
+    await img.decode();
+    ed.history.push(before);
+    edImage.getContext('2d').drawImage(img, 0, 0, edImage.width, edImage.height);
+    edMask.getContext('2d').clearRect(0, 0, edMask.width, edMask.height);
+  } catch (e) {
+    $('edError').textContent = e.message;
+    $('edError').hidden = false;
+  }
+  $('edBusy').hidden = true;
+  $('edFix').disabled = $('edUse').disabled = false;
+  $('edUndo').disabled = !ed.history.length;
+});
+$('edUndo').addEventListener('click', async () => {
+  const prev = ed.history.pop();
+  if (!prev) return;
+  const img = new Image();
+  img.src = prev;
+  await img.decode();
+  edImage.getContext('2d').drawImage(img, 0, 0);
+  $('edUndo').disabled = !ed.history.length;
+});
+$('edUse').addEventListener('click', async () => {
+  const blob = await new Promise((r) => edImage.toBlob(r, 'image/png'));
+  closeEditor();
+  showTab(false);
+  pick(new File([blob], ed.name + '-fixed.png', { type: 'image/png' }));
+  $('drop').scrollIntoView({ block: 'nearest' });
+});
+
+$('fixPicture').addEventListener('click', () => picked && openEditor(pickedUrl, $('name').value || 'model'));
+
+function snapshot() {
+  // the model exactly as it's shown, at up to 1024 px, with a see-through background
+  const size = renderer.getSize(new THREE.Vector2()), ratio = renderer.getPixelRatio();
+  const s = 1024 / Math.max(size.x, size.y);
+  renderer.setPixelRatio(1);
+  renderer.setSize(Math.round(size.x * s), Math.round(size.y * s), false);
+  renderer.render(scene, camera);
+  const url = renderer.domElement.toDataURL('image/png');
+  renderer.setPixelRatio(ratio);
+  renderer.setSize(size.x, size.y, false);
+  return url;
+}
+$('fixModel').addEventListener('click', () => {
+  controls.autoRotate = false;
+  openEditor(snapshot(), (current && current.folder) || 'model');
+});

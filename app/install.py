@@ -19,6 +19,8 @@ TORCH2 = [f"{ROCM}/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl",
           f"{ROCM}/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl"]
 TRIPOSR_CODE = "https://github.com/VAST-AI-Research/TripoSR/archive/107cefdc244c39106fa830359024f6a2f1c78871.zip"
 TRELLIS_EXE = "https://github.com/pwilkin/trellis.cpp/releases/download/v0.8.1/trellis-vulkan-windows-x64.zip"
+SDCPP_EXE = ("https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1030-0a06712/"
+             "sd-master-0a06712-bin-win-vulkan-x64.zip")
 TRELLIS_Q8 = "https://huggingface.co/ilintar/trellis2-gguf/resolve/main/q8/{}.gguf"
 DOWNLOADS = [  # (url, where it goes)
     ("https://huggingface.co/stabilityai/TripoSR/resolve/main/config.yaml", MODELS / "TripoSR" / "config.yaml"),
@@ -27,6 +29,13 @@ DOWNLOADS = [  # (url, where it goes)
     *[(TRELLIS_Q8.format(f), MODELS / "trellis2-q8" / f"{f}.gguf") for f in
       ["birefnet", "dinov3", "ss_flow", "ss_dec", "shape_flow_512", "shape_flow_1024", "shape_dec",
        "tex_flow_512", "tex_flow_1024", "tex_dec"]],
+    # the picture AI (prompt mode and highlight-and-fix): FLUX.2 [klein] 4B and its text reader, Apache 2.0
+    ("https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/main/flux-2-klein-4b-Q8_0.gguf",
+     MODELS / "flux2-klein" / "flux-2-klein-4b-Q8_0.gguf"),
+    ("https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q8_0.gguf",
+     MODELS / "flux2-klein" / "Qwen3-4B-Q8_0.gguf"),
+    ("https://huggingface.co/Comfy-Org/flux2-klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors",
+     MODELS / "flux2-klein" / "flux2-vae.safetensors"),
 ]
 
 
@@ -55,8 +64,8 @@ def pip(*args):
 
 
 def main():
-    print("This downloads about 15 GB in total: AMD's PyTorch (2 GB), helper libraries (0.5 GB), TripoSR (1.9 GB),\n"
-          "and TRELLIS.2 (10 GB). Everything stays in this folder.")
+    print("This downloads about 24 GB in total: AMD's PyTorch (2 GB), helper libraries (0.5 GB), TripoSR (1.9 GB),\n"
+          "TRELLIS.2 (10 GB) and the FLUX.2 [klein] picture AI (9 GB). Everything stays in this folder.")
     if input("Continue? [Y/n] ").strip().lower().startswith("n"):
         return
 
@@ -87,6 +96,15 @@ def main():
         fetch(TRELLIS_EXE, zpath)
         with zipfile.ZipFile(zpath) as z:
             z.extractall(exe.parent)
+        zpath.unlink()
+
+    sd = ROOT / "engines" / "sdcpp" / "sd-cli.exe"
+    if not sd.exists():
+        say("Getting stable-diffusion.cpp (the picture AI for prompt mode and fixes, Vulkan)")
+        zpath = ROOT / "engines" / "sd-vulkan-windows-x64.zip"
+        fetch(SDCPP_EXE, zpath)
+        with zipfile.ZipFile(zpath) as z:
+            z.extractall(sd.parent)
         zpath.unlink()
 
     say("Downloading the AI models (resumes where it left off if you run Setup again)")

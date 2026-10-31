@@ -15,12 +15,27 @@
 
   <main>
     <section class="panel left">
+      <div class="tabs" role="tablist">
+        <button id="tabPicture" class="tab on" role="tab">From a picture</button>
+        <button id="tabWords" class="tab" role="tab">From words</button>
+      </div>
+
+      <div id="wordsBox" class="words" hidden>
+        <textarea id="prompt" rows="3" maxlength="800"
+          placeholder="Describe the thing to make, e.g. “a glowing blue dragon head”, “a golden trophy with wings”, “a cartoon rocket”"></textarea>
+        <div class="row">
+          <button id="draw" class="button">Draw it</button>
+          <span id="drawText" class="muted"></span>
+        </div>
+      </div>
+
       <label id="drop" class="drop" tabindex="0">
         <input id="file" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden>
         <img id="picked" alt="" hidden>
         <span id="dropText">Drop a picture here, click to pick one, or paste with Ctrl+V</span>
       </label>
       <p id="cutHint" class="cut-hint" hidden></p>
+      <button id="fixPicture" class="button" hidden>Highlight and fix part of this picture</button>
 
       <div class="field">
         <label for="name">Name</label>
@@ -72,6 +87,10 @@
           <button id="openFolder" class="button">Open folder</button>
         </div>
       </div>
+      <div id="fixModelBar" class="mirror" hidden>
+        <span>Something wrong with it? Turn it to show the problem, then</span>
+        <button id="fixModel" class="button">Highlight and fix it</button>
+      </div>
       <div id="mirrorBar" class="mirror" hidden>
         <span id="mirrorText"></span>
         <button id="mirrorBtn" class="button">Fix it by mirroring</button>
@@ -94,6 +113,35 @@
     <p class="tip">To use one in your Rocket League game, copy its folder to <code>assets/hq/explosions/&lt;name&gt;/</code>
       (so the file is <code>model.glb</code> there), then ask the game's Claude session to hook it up.</p>
   </section>
+
+  <div id="editor" class="editor" hidden>
+    <div class="editor-box" role="dialog" aria-label="Highlight and fix">
+      <div class="editor-head">
+        <h2>Highlight and fix</h2>
+        <button id="edClose" class="link">Close</button>
+      </div>
+      <p class="muted">Paint over the part that's wrong, then say what it should be. Leave it unpainted to change the
+        whole picture.</p>
+      <div class="ed-stage">
+        <canvas id="edImage"></canvas>
+        <canvas id="edMask"></canvas>
+        <div id="edBusy" class="ed-busy" hidden><div class="bar"><div id="edBar"></div></div><p id="edStep"></p></div>
+      </div>
+      <div class="row">
+        <label class="muted">Brush <input id="edBrush" type="range" min="4" max="120" value="36"></label>
+        <button id="edErase" class="button">Eraser</button>
+        <button id="edClear" class="button">Clear highlight</button>
+        <button id="edUndo" class="button" disabled>Undo fix</button>
+      </div>
+      <textarea id="edPrompt" rows="2" maxlength="800"
+        placeholder="What should it be? e.g. “complete black tires, no grass”, “remove the headphones”, “make the eyes glow red”"></textarea>
+      <p id="edError" class="error" hidden></p>
+      <div class="row end">
+        <button id="edFix" class="button">Fix it</button>
+        <button id="edUse" class="primary">Use this picture</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/web/app.js"></script>
 </body>

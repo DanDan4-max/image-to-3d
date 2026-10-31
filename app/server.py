@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+import picture_ai
 import pipeline
 import symmetry
 import trellis_engine
@@ -38,7 +39,8 @@ triposr = None  # loaded the first time a quick draft is asked for, and dropped 
 
 
 def engines():
-    return {"trellis": trellis_engine.available(), "triposr": (pipeline.MODELS / "TripoSR" / "model.ckpt").exists()}
+    return {"trellis": trellis_engine.available(), "triposr": (pipeline.MODELS / "TripoSR" / "model.ckpt").exists(),
+            "pictures": picture_ai.available()}
 
 
 def status():
@@ -49,7 +51,8 @@ def status():
     if not pipeline.torch.cuda.is_available():
         problems.append("PyTorch can't see the GPU, so quick drafts will be slow")
     gpu = pipeline.torch.cuda.get_device_name(0) if pipeline.torch.cuda.is_available() else "CPU"
-    return {"ready": any(e.values()), "engines": e, "device": gpu, "problems": problems, "output": str(pipeline.OUTPUT)}
+    return {"ready": e["trellis"] or e["triposr"], "engines": e, "device": gpu, "problems": problems,
+            "output": str(pipeline.OUTPUT)}
 
 
 def free_triposr():
@@ -70,6 +73,15 @@ def worker():
             job["step"], job["progress"] = text, frac
 
         try:
+            if job["kind"] in ("imagine", "edit"):
+                free_triposr()
+                out = UPLOADS / f"{job['id']}.png"
+                if job["kind"] == "imagine":
+                    picture_ai.imagine(job["prompt"], out, seed=job["seed"], progress=step)
+                else:
+                    picture_ai.edit(job["upload"], job["mask"], job["prompt"], out, seed=job["seed"], progress=step)
+                job.update(state="done", result={"id": job["id"], "image": f"/uploads/{job['id']}.png"})
+                continue
             common = dict(name=job["name"], remove_bg=job["remove_bg"], progress=step, source_name=job["source_name"] or None,
                           cutout=job["cutout"])
             if job["engine"] == "triposr":
@@ -85,7 +97,19 @@ def worker():
             traceback.print_exc()
             job.update(state="error", error=str(e) if isinstance(e, pipeline.NoObjectError) else f"Something went wrong: {e}")
         finally:
-            Path(job["upload"]).unlink(missing_ok=True)
+            for f in (job.get("upload"), job.get("mask")):
+                if f:
+                    Path(f).unlink(missing_ok=True)
+
+
+def queue_job(**fields):
+    ahead = sum(1 for j in jobs.values() if j["state"] in ("queued", "running"))
+    job_id = fields.pop("id", None) or uuid.uuid4().hex[:12]
+    jobs[job_id] = {"id": job_id, "state": "queued", "progress": 0.0, "started": None, "upload": None, "mask": None,
+                    "step": f"Waiting for {ahead} other job{'s' if ahead > 1 else ''} to finish" if ahead else "Starting",
+                    **fields}
+    work.put(jobs[job_id])
+    return job_id
 
 
 def summary(folder):
@@ -156,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
             job = jobs.get(p[len("/api/jobs/"):])
             if not job:
                 return self._send(404, {"error": "no such job"})
-            return self._send(200, {k: v for k, v in job.items() if k not in ("upload", "cutout")})
+            return self._send(200, {k: v for k, v in job.items() if k not in ("upload", "cutout", "mask")})
         if p.startswith("/uploads/"):
             cut = cutout_file(p[len("/uploads/"):].removesuffix(".png"))
             return self._file(cut) if cut else self._send(404, {"error": "not found"})
@@ -200,19 +224,38 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": f"{ENGINES[engine]} isn't installed. Run Setup.bat."})
             UPLOADS.mkdir(parents=True, exist_ok=True)
             job_id = uuid.uuid4().hex[:12]
-            upload = UPLOADS / f"{job_id}{ext}"
+            upload = UPLOADS / f"{job_id}-picture{ext}"
             upload.write_bytes(self.rfile.read(size))
-            ahead = sum(1 for j in jobs.values() if j["state"] in ("queued", "running"))
-            jobs[job_id] = {
-                "id": job_id, "state": "queued", "progress": 0.0, "started": None,
-                "step": f"Waiting for {ahead} other model{'s' if ahead > 1 else ''} to finish" if ahead else "Starting",
-                "name": (q.get("name") or "model")[:60], "engine": engine,
-                "size": "full" if q.get("size") == "full" else "game", "remove_bg": q.get("remove_bg", "1") != "0",
-                "upload": str(upload), "source_name": q.get("filename", "")[:120],
-                "cutout": cutout_file(q.get("cutout")) if q.get("remove_bg", "1") != "0" else None,
-            }
-            work.put(jobs[job_id])
+            queue_job(
+                id=job_id, kind="model", name=(q.get("name") or "model")[:60], engine=engine,
+                size="full" if q.get("size") == "full" else "game", remove_bg=q.get("remove_bg", "1") != "0",
+                upload=str(upload), source_name=q.get("filename", "")[:120],
+                cutout=cutout_file(q.get("cutout")) if q.get("remove_bg", "1") != "0" else None)
             return self._send(200, {"id": job_id})
+        if url.path in ("/api/imagine", "/api/edit"):
+            if not picture_ai.available():
+                return self._send(400, {"error": "The picture AI isn't installed. Run Setup.bat."})
+            size = int(self.headers.get("Content-Length") or 0)
+            if not 0 < size < 80 * 2**20:
+                return self._send(400, {"error": "Nothing to work with."})
+            try:
+                body = json.loads(self.rfile.read(size))
+            except ValueError:
+                return self._send(400, {"error": "Bad request."})
+            prompt = str(body.get("prompt") or "").strip()[:800]
+            if not prompt:
+                return self._send(400, {"error": "Type what you want first."})
+            seed = int(body.get("seed", -1))
+            if url.path == "/api/imagine":
+                return self._send(200, {"id": queue_job(kind="imagine", prompt=prompt, seed=seed)})
+            UPLOADS.mkdir(parents=True, exist_ok=True)
+            job_id = uuid.uuid4().hex[:12]
+            picture = save_data_url(body.get("image"), UPLOADS / f"{job_id}-edit.png")
+            if not picture:
+                return self._send(400, {"error": "No picture to fix."})
+            mask = save_data_url(body.get("mask"), UPLOADS / f"{job_id}-mask.png")
+            return self._send(200, {"id": queue_job(id=job_id, kind="edit", prompt=prompt, seed=seed,
+                                                    upload=str(picture), mask=str(mask) if mask else None)})
         if url.path == "/api/open":
             target = model_folder(q.get("folder")) or pipeline.OUTPUT
             target.mkdir(parents=True, exist_ok=True)
@@ -246,6 +289,22 @@ class Handler(BaseHTTPRequestHandler):
             info.write_text(json.dumps(meta), encoding="utf-8")
             return self._send(200, summary(folder))
         self._send(404, {"error": "not found"})
+
+
+def save_data_url(data, dest):
+    """Save a 'data:image/png;base64,...' string from the page as a PNG; None if there isn't a picture in it."""
+    import base64
+    import io
+    from PIL import Image
+    if not isinstance(data, str) or "," not in data or not data.startswith("data:image/"):
+        return None
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(data.split(",", 1)[1])))
+        img.load()
+    except Exception:
+        return None
+    img.save(dest, format="PNG")
+    return dest
 
 
 def cutout_file(cut_id):
