@@ -60,7 +60,8 @@ The tool's own code is MIT licensed (see `LICENSE`). The models you make are you
 
 ## Setup
 
-It's already set up on this PC. To set it up again, or on another Windows PC with an AMD card, double-click **`Setup.bat`**. It needs Python 3.12, an AMD graphics driver 26.2.2 or newer, and about 25 GB of free disk space. It downloads about 15 GB.
+1. Get the code from https://github.com/DanDan4-max/image-to-3d: click **Code → Download ZIP** and unzip it, or run `git clone https://github.com/DanDan4-max/image-to-3d.git`.
+2. Double-click **`Setup.bat`**. It needs Windows, an AMD Radeon card, Python 3.12, an AMD graphics driver 26.2.2 or newer, and about 25 GB of free disk space. It downloads about 15 GB.
 
 Keep this folder outside OneDrive, because the model files are big.
 
