@@ -33,6 +33,7 @@ ENGINES = {"trellis-1024": "TRELLIS.2", "trellis-512": "TRELLIS.2 (faster)", "tr
 jobs = {}
 work = queue.Queue()
 mirror_lock = threading.Lock()
+cutout_lock = threading.Lock()
 triposr = None  # loaded the first time a quick draft is asked for, and dropped again before TRELLIS.2 runs
 
 
@@ -69,7 +70,8 @@ def worker():
             job["step"], job["progress"] = text, frac
 
         try:
-            common = dict(name=job["name"], remove_bg=job["remove_bg"], progress=step, source_name=job["source_name"] or None)
+            common = dict(name=job["name"], remove_bg=job["remove_bg"], progress=step, source_name=job["source_name"] or None,
+                          cutout=job["cutout"])
             if job["engine"] == "triposr":
                 if triposr is None:
                     step("Loading the TripoSR model", 0.02)
@@ -154,7 +156,10 @@ class Handler(BaseHTTPRequestHandler):
             job = jobs.get(p[len("/api/jobs/"):])
             if not job:
                 return self._send(404, {"error": "no such job"})
-            return self._send(200, {k: v for k, v in job.items() if k != "upload"})
+            return self._send(200, {k: v for k, v in job.items() if k not in ("upload", "cutout")})
+        if p.startswith("/uploads/"):
+            cut = cutout_file(p[len("/uploads/"):].removesuffix(".png"))
+            return self._file(cut) if cut else self._send(404, {"error": "not found"})
         if p.startswith("/files/"):
             parts = p[len("/files/"):].split("/")
             if len(parts) == 2 and parts[1] in FILES and parts[0] and not parts[0].startswith("."):
@@ -168,13 +173,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
-        if url.path == "/api/jobs":
+        if url.path in ("/api/jobs", "/api/cutout"):
             ext = IMAGE_TYPES.get((self.headers.get("Content-Type") or "").split(";")[0].strip())
             size = int(self.headers.get("Content-Length") or 0)
             if not ext:
                 return self._send(400, {"error": "That file isn't a picture. Use a PNG, JPG or WEBP image."})
             if not 0 < size < 60 * 2**20:
                 return self._send(400, {"error": "That picture is too big (60 MB max)."})
+        if url.path == "/api/cutout":
+            UPLOADS.mkdir(parents=True, exist_ok=True)
+            cut_id = uuid.uuid4().hex[:12]
+            upload = UPLOADS / f"{cut_id}-picture{ext}"
+            upload.write_bytes(self.rfile.read(size))
+            try:
+                with cutout_lock:
+                    make_cutout(upload, UPLOADS / f"{cut_id}.png")
+            except Exception as e:
+                traceback.print_exc()
+                return self._send(500, {"error": str(e) if isinstance(e, pipeline.NoObjectError) else f"Couldn't cut it out: {e}"})
+            finally:
+                upload.unlink(missing_ok=True)
+            return self._send(200, {"id": cut_id, "url": f"/uploads/{cut_id}.png"})
+        if url.path == "/api/jobs":
             engine = q.get("engine") if q.get("engine") in ENGINES else "trellis-1024"
             if not engines()["triposr" if engine == "triposr" else "trellis"]:
                 return self._send(400, {"error": f"{ENGINES[engine]} isn't installed. Run Setup.bat."})
@@ -189,6 +209,7 @@ class Handler(BaseHTTPRequestHandler):
                 "name": (q.get("name") or "model")[:60], "engine": engine,
                 "size": "full" if q.get("size") == "full" else "game", "remove_bg": q.get("remove_bg", "1") != "0",
                 "upload": str(upload), "source_name": q.get("filename", "")[:120],
+                "cutout": cutout_file(q.get("cutout")) if q.get("remove_bg", "1") != "0" else None,
             }
             work.put(jobs[job_id])
             return self._send(200, {"id": job_id})
@@ -225,6 +246,27 @@ class Handler(BaseHTTPRequestHandler):
             info.write_text(json.dumps(meta), encoding="utf-8")
             return self._send(200, summary(folder))
         self._send(404, {"error": "not found"})
+
+
+def cutout_file(cut_id):
+    """The cut-out picture made by /api/cutout, if `cut_id` really is one."""
+    if not cut_id or not all(c in "0123456789abcdef" for c in cut_id) or len(cut_id) != 12:
+        return None
+    f = UPLOADS / f"{cut_id}.png"
+    return f if f.exists() else None
+
+
+def make_cutout(picture, dest):
+    """Cut the object out with TRELLIS.2's own remover (BiRefNet), or TripoSR's if TRELLIS.2 isn't installed.
+    While a model is being made the GPU is busy, so the remover runs on the CPU instead (slower, same result)."""
+    if trellis_engine.available():
+        busy = any(j["state"] == "running" for j in jobs.values())
+        return trellis_engine.cutout_only(picture, dest, cpu=busy)
+    import rembg
+    from PIL import Image, ImageOps
+    img = ImageOps.exif_transpose(Image.open(picture)).convert("RGBA")
+    rembg.remove(img, session=rembg.new_session("u2net")).save(dest)
+    return dest
 
 
 def model_folder(name):

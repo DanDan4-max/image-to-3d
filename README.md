@@ -36,6 +36,7 @@ Mirroring flips any writing on the object, so skip it for things with text or lo
 
 ### Tips for good results
 
+- **Check the cut-out.** Right after you pick a picture, the page shows exactly what the AI will see, on a see-through checkerboard. Anything missing there comes out wrong in 3D. For example, in a Rocket League screenshot the grass hides the bottom of the tires, so the wheels come out mangled. Use a picture where the whole object shows: the car mid-jump, on a flat floor, or a clean render.
 - Use one object, seen from the front or slightly above, with nothing covering it.
 - A plain background helps, but the background is removed automatically.
 - The AI has to guess the back of the object, so a 3/4 view shows it more than a flat side view.

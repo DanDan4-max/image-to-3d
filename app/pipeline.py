@@ -118,8 +118,9 @@ class ImageTo3D:
     # ---------- the whole job ----------
 
     def generate(self, image_path, name=None, quality="game", colors="texture", remove_bg=True,
-                 foreground_ratio=0.85, progress=None, source_name=None):
-        """Picture in, output/<name>/model.glb out. progress(text, 0..1) is told what's happening."""
+                 foreground_ratio=0.85, progress=None, source_name=None, cutout=None):
+        """Picture in, output/<name>/model.glb out. progress(text, 0..1) is told what's happening.
+        cutout: an already cut-out picture of the object to use instead of cutting it out here."""
         step = progress or (lambda text, frac: self.log(text))
         q = QUALITY[quality]
         t0 = time.time()
@@ -129,7 +130,7 @@ class ImageTo3D:
         shutil.copyfile(image_path, folder / ("source" + image_path.suffix.lower()))
 
         step("Cutting the object out of the picture", 0.05)
-        cut = self.cutout(Image.open(image_path), remove_bg, foreground_ratio)
+        cut = self.cutout(Image.open(cutout or image_path), remove_bg, foreground_ratio)
         cut.save(folder / "cutout.png")
 
         step("AI is imagining the 3D shape", 0.15)

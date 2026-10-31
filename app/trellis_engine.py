@@ -44,7 +44,38 @@ def available():
     return EXE.exists() and all((WEIGHTS / f"{f}.gguf").exists() for f in FILES)
 
 
-def generate(image_path, name=None, res=1024, size="game", remove_bg=True, progress=None, source_name=None, log=print):
+def upright_png(image_path, dest):
+    """trellis.cpp reads PNG/JPG only, and ignores phone-camera rotation, so hand it a clean upright PNG.
+    Returns whether the picture already has a transparent background."""
+    from PIL import Image, ImageOps
+    img = ImageOps.exif_transpose(Image.open(image_path))
+    has_alpha = "A" in img.getbands() or "transparency" in img.info
+    img.convert("RGBA" if has_alpha else "RGB").save(dest)
+    return has_alpha
+
+
+def cutout_only(image_path, dest, cpu=False):
+    """Just the background removal (BiRefNet, the same one TRELLIS.2 uses): about 10 s on the GPU, 30 s on the
+    CPU (used while a model is being made, so the two don't fight over graphics memory)."""
+    dest = Path(dest)
+    picture = dest.with_name(dest.stem + "-in.png")
+    upright_png(image_path, picture)
+    cmd = [str(EXE), str(picture), str(dest.with_suffix(".glb")), "--models", str(WEIGHTS), "--bg-only"]
+    if cpu:
+        cmd += ["--backend", "CPU"]
+    r = subprocess.run(cmd, cwd=str(EXE.parent), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       creationflags=subprocess.CREATE_NO_WINDOW)
+    picture.unlink(missing_ok=True)
+    made = dest.with_name(dest.stem + "_cutout.png")
+    if r.returncode != 0 or not made.exists():
+        raise RuntimeError("Couldn't cut the object out: " + "\n".join((r.stdout or "").splitlines()[-3:]))
+    made.replace(dest)
+    return dest
+
+
+def generate(image_path, name=None, res=1024, size="game", remove_bg=True, progress=None, source_name=None, log=print,
+             cutout=None):
+    """cutout: an already cut-out picture of the object (from cutout_only) to use instead of cutting it out here."""
     step = progress or (lambda text, frac: log(text))
     t0 = time.time()
     image_path = Path(image_path)
@@ -53,12 +84,8 @@ def generate(image_path, name=None, res=1024, size="game", remove_bg=True, progr
     shutil.copyfile(image_path, folder / ("source" + image_path.suffix.lower()))
     glb = folder / "model.glb"
 
-    # trellis.cpp reads PNG/JPG only, and ignores phone-camera rotation, so hand it a clean upright PNG
-    from PIL import Image, ImageOps
-    img = ImageOps.exif_transpose(Image.open(image_path))
-    has_alpha = "A" in img.getbands() or "transparency" in img.info
     picture = folder / "input.png"
-    img.convert("RGBA" if has_alpha else "RGB").save(picture)
+    has_alpha = upright_png(cutout or image_path, picture)
 
     # --fa-fast: Radeon cards have no BF16 in Vulkan, so trellis.cpp's default attention precision crawls; F16 runs
     # about 3x faster with the same look (checked side by side on an RX 9070 XT)

@@ -69,17 +69,60 @@ function show(folder, file = 'model.glb', keepView = false) {
 }
 
 // ---------- picking a picture ----------
-let picked = null;
+// Right after a picture is picked, the server cuts the object out (about 10 s) and the page shows exactly what the
+// AI will get, so a bad cut-out (say, tire bottoms hidden in grass) is caught before a 5-minute run.
+let picked = null, pickedUrl = null, cutout = null, cutting = 0;
 function pick(file) {
   if (!file || !file.type.startsWith('image/')) return showError("That file isn't a picture. Use a PNG, JPG or WEBP image.");
   picked = file;
-  $('picked').src = URL.createObjectURL(file);
+  pickedUrl = URL.createObjectURL(file);
   $('picked').hidden = false;
   $('dropText').hidden = true;
   $('name').value = (file.name || 'pasted').replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase().slice(0, 60);
   $('error').hidden = true;
-  updateButton();
+  cutout = null;
+  refreshCutout();
 }
+
+async function refreshCutout() {
+  const hint = $('cutHint');
+  if (!picked || !$('removeBg').checked) {
+    $('picked').src = pickedUrl || '';
+    hint.hidden = !picked;
+    hint.textContent = 'Using the picture as it is. It should already have a plain or see-through background.';
+    return updateButton();
+  }
+  if (cutout && cutout.file === picked && cutout.failed) {
+    $('picked').src = pickedUrl;
+    hint.hidden = false;
+    hint.textContent = "Couldn't cut it out ahead of time. The background will be removed during the run instead.";
+    return updateButton();
+  }
+  if (cutout && cutout.file === picked) {
+    $('picked').src = cutout.url;
+    hint.hidden = false;
+    hint.innerHTML = '<b>This is what the AI will see.</b> Check that nothing is missing, like wheel bottoms hidden ' +
+      'in grass. Missing parts come out wrong, so if something is cut off, try a picture where the whole object shows.';
+    return updateButton();
+  }
+  const file = picked, ticket = ++cutting;
+  $('picked').src = pickedUrl;
+  hint.hidden = false;
+  hint.textContent = 'Cutting the object out of the picture… (about 10 seconds)';
+  updateButton();
+  try {
+    const r = await api('/api/cutout', { method: 'POST', body: file, headers: { 'Content-Type': file.type } });
+    if (ticket !== cutting) return;  // a newer picture was picked meanwhile
+    cutout = { file, id: r.id, url: r.url };
+  } catch (e) {
+    if (ticket !== cutting) return;
+    cutout = { file, failed: true };
+    showError(e.message);
+  }
+  cutting = ticket === cutting ? 0 : cutting;
+  refreshCutout();
+}
+$('removeBg').addEventListener('change', refreshCutout);
 $('file').addEventListener('change', (e) => pick(e.target.files[0]));
 const drop = $('drop');
 drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
@@ -113,7 +156,7 @@ setInterval(poll, 3000);
 poll();
 
 let busy = false;
-function updateButton() { $('go').disabled = !picked || busy || !status.ready; }
+function updateButton() { $('go').disabled = !picked || busy || !status.ready || (cutting && $('removeBg').checked); }
 function showError(msg) { $('error').textContent = msg; $('error').hidden = false; }
 
 // ---------- making a model ----------
@@ -128,6 +171,7 @@ $('go').addEventListener('click', async () => {
     name: $('name').value || 'model', engine, size: document.querySelector('input[name=size]:checked').value,
     remove_bg: $('removeBg').checked ? '1' : '0', filename: picked.name || 'pasted.png',
   });
+  if ($('removeBg').checked && cutout && cutout.file === picked && cutout.id) q.set('cutout', cutout.id);
   try {
     const { id } = await api('/api/jobs?' + q, { method: 'POST', body: picked, headers: { 'Content-Type': picked.type } });
     for (;;) {
