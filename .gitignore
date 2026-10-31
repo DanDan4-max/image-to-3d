@@ -1,0 +1,9 @@
+# downloaded by Setup.bat
+/.venv/
+/models/
+/engines/
+/vendor/
+# your own models
+/output/
+__pycache__/
+*.log
