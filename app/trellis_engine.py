@@ -121,7 +121,7 @@ def shrink_glb(path, max_faces, size):
     import trimesh
     from scipy.spatial import cKDTree
 
-    from pipeline import Atlas
+    from pipeline import Atlas, jpeg_textures
 
     scene = trimesh.load(path, force="scene")
     hi = scene.to_geometry() if hasattr(scene, "to_geometry") else scene.dump(concatenate=True)
@@ -152,21 +152,22 @@ def shrink_glb(path, max_faces, size):
     d, idx = cKDTree(pts).query(atlas.points, k=4, workers=-1)
     wgt = 1.0 / (d + 1e-6)
     wgt /= wgt.sum(1, keepdims=True)
-    tex = {k: atlas.image((s[idx] * wgt[..., None]).sum(1).round().astype(np.uint8), jpeg=k != "baseColorTexture"
-                          or s[:, 3].min() > 250) for k, s in samples.items()}
+    tex = {k: atlas.image((s[idx] * wgt[..., None]).sum(1).round().astype(np.uint8), jpeg=False)
+           for k, s in samples.items()}
     material = trimesh.visual.material.PBRMaterial(
         baseColorTexture=tex.get("baseColorTexture"), metallicRoughnessTexture=tex.get("metallicRoughnessTexture"),
         emissiveTexture=tex.get("emissiveTexture"), emissiveFactor=mat.emissiveFactor,
         baseColorFactor=mat.baseColorFactor, metallicFactor=mat.metallicFactor, roughnessFactor=mat.roughnessFactor,
         alphaMode=mat.alphaMode, doubleSided=mat.doubleSided)
-    out = atlas.mesh(material)
+    out = atlas.mesh(jpeg_textures(material))
     Path(path).write_bytes(trimesh.Scene(out).export(file_type="glb", include_normals=True))
     return len(out.faces)
 
 
-def normalize_glb(path):
+def normalize_glb(path, count_only=False):
     """Make the model 1 unit at its biggest, centered, sitting on y = 0, by wrapping the scene in one parent
-    node (the mesh data and textures are left exactly as they are). Returns the triangle count."""
+    node (the mesh data and textures are left exactly as they are). Returns the triangle count; with count_only
+    the file isn't changed."""
     data = Path(path).read_bytes()
     magic, version, _ = struct.unpack_from("<III", data, 0)
     if magic != 0x46546C67:
@@ -220,7 +221,7 @@ def normalize_glb(path):
     scene = gltf["scenes"][gltf.get("scene", 0)]
     for r in scene["nodes"]:
         walk(r, np.eye(4))
-    if not np.all(np.isfinite(lo)):
+    if count_only or not np.all(np.isfinite(lo)):
         return faces
     s = 1.0 / max(float(np.max(hi - lo)), 1e-9)
     center = [(lo[0] + hi[0]) / 2, lo[1], (lo[2] + hi[2]) / 2]

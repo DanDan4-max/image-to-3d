@@ -220,11 +220,7 @@ class Atlas:
         tex[self.filled] = values
         _, (iy, ix) = ndimage.distance_transform_edt(~self.filled, return_indices=True)
         img = Image.fromarray(tex[iy, ix]).transpose(Image.FLIP_TOP_BOTTOM)
-        if jpeg:
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=90)
-            img = Image.open(io.BytesIO(buf.getvalue()))  # trimesh keeps JPEG textures as JPEG
-        return img
+        return as_jpeg(img) if jpeg else img
 
     def mesh(self, material):
         m = self.source
@@ -233,6 +229,24 @@ class Atlas:
 
 
 # ---------- helpers ----------
+
+def as_jpeg(img, quality=90):
+    """A JPEG copy of a texture. trimesh writes JPEG-backed images into the .glb as JPEG and everything else as
+    PNG, which is several times bigger for photo-like textures."""
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, format="JPEG", quality=quality)
+    return Image.open(io.BytesIO(buf.getvalue()))
+
+
+def jpeg_textures(material):
+    """Store an opaque material's textures as JPEG (normal maps and see-through color maps stay PNG)."""
+    opaque = getattr(material, "alphaMode", None) in (None, "OPAQUE")
+    for k in ("baseColorTexture", "metallicRoughnessTexture", "emissiveTexture", "occlusionTexture"):
+        img = getattr(material, k, None)
+        if img is not None and (k != "baseColorTexture" or opaque):
+            setattr(material, k, as_jpeg(img))
+    return material
+
 
 def _clean(mesh):
     """Drop floating crumbs, and make sure the faces point outwards."""

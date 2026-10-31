@@ -43,8 +43,9 @@ function resize() {
 new ResizeObserver(resize).observe(box);
 renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 
-function show(folder) {
-  new GLTFLoader().load(`/files/${encodeURIComponent(folder)}/model.glb?t=${Date.now()}`, (gltf) => {
+// keepView: swap the model but leave the camera where it is (for comparing versions from the same angle)
+function show(folder, file = 'model.glb', keepView = false) {
+  new GLTFLoader().load(`/files/${encodeURIComponent(folder)}/${file}?t=${Date.now()}`, (gltf) => {
     if (shown) scene.remove(shown);
     shown = gltf.scene;
     // fit whatever size the model is into view, sitting on the ground
@@ -53,12 +54,13 @@ function show(folder) {
     shown.scale.setScalar(s);
     shown.position.set(-c.x * s, -b.min.y * s, -c.z * s);
     scene.add(shown);
+    $('viewerHint').hidden = true;
+    if (keepView) return;
     // a 3/4 view from a little above, just far enough to fit the whole model
     const r = size.length() * s / 2, dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 0.85;
     controls.target.set(0, size.y * s / 2, 0);
     camera.position.set(dist * 0.55, size.y * s / 2 + dist * 0.35, dist * 0.76);
     controls.autoRotate = true;
-    $('viewerHint').hidden = true;
   }, undefined, () => showError('Could not open that model.'));
   const cut = $('cutout');
   cut.src = `/files/${encodeURIComponent(folder)}/cutout.png`;
@@ -160,8 +162,46 @@ function done(r) {
   $('resultPath').textContent = r.path;
   $('download').href = `/files/${encodeURIComponent(r.folder)}/model.glb`;
   $('download').download = `${r.folder}.glb`;
+  $('mirrorBar').hidden = false;
+  $('mirrorBtn').hidden = false;
+  $('mirrorPick').hidden = true;
+  $('mirrorText').textContent = r.mirrored
+    ? 'Mirrored so both sides match.'
+    : 'Other side look wrong? The AI only saw one side of it.';
+  $('mirrorBtn').textContent = r.mirrored ? 'Pick a different side' : 'Fix it by mirroring';
   loadGallery();
 }
+
+// ---------- mirror fix ----------
+let picking = 'mirror-a';
+function pickVersion(v) {
+  picking = v;
+  for (const s of document.querySelectorAll('#mirrorPick .seg')) s.classList.toggle('on', s.dataset.v === v);
+  show(current.folder, v + '.glb', true);
+}
+$('mirrorBtn').addEventListener('click', async () => {
+  const b = $('mirrorBtn');
+  b.disabled = true;
+  b.textContent = 'Mirroring… (a few seconds)';
+  try {
+    await api('/api/mirror?folder=' + encodeURIComponent(current.folder), { method: 'POST' });
+    b.hidden = true;
+    $('mirrorText').textContent = 'Spin it around and pick the one that looks right:';
+    $('mirrorPick').hidden = false;
+    pickVersion('mirror-a');
+  } catch (e) {
+    showError(e.message);
+  }
+  b.disabled = false;
+});
+for (const s of document.querySelectorAll('#mirrorPick .seg')) s.addEventListener('click', () => pickVersion(s.dataset.v));
+$('mirrorKeep').addEventListener('click', async () => {
+  try {
+    done(await api(`/api/choose?folder=${encodeURIComponent(current.folder)}&version=${picking}`, { method: 'POST' }));
+  } catch (e) {
+    showError(e.message);
+  }
+});
 $('openFolder').addEventListener('click', () => current && api('/api/open?folder=' + encodeURIComponent(current.folder), { method: 'POST' }));
 $('openAll').addEventListener('click', () => api('/api/open', { method: 'POST' }));
 

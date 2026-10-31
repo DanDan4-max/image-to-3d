@@ -8,9 +8,11 @@ import mimetypes
 import os
 import queue
 import shutil
+import socket
 import threading
 import time
 import traceback
+import urllib.request
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -18,16 +20,19 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import pipeline
+import symmetry
 import trellis_engine
 
 WEB = Path(__file__).resolve().parent / "web"
 UPLOADS = pipeline.OUTPUT / ".uploads"
-FILES = {"model.glb", "cutout.png", "license.txt"}
+FILES = {"model.glb", "cutout.png", "license.txt", "original.glb", "mirror-a.glb", "mirror-b.glb"}
+VERSIONS = {"original", "mirror-a", "mirror-b"}
 IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/bmp": ".bmp", "image/gif": ".gif"}
 ENGINES = {"trellis-1024": "TRELLIS.2", "trellis-512": "TRELLIS.2 (faster)", "triposr": "TripoSR draft"}
 
 jobs = {}
 work = queue.Queue()
+mirror_lock = threading.Lock()
 triposr = None  # loaded the first time a quick draft is asked for, and dropped again before TRELLIS.2 runs
 
 
@@ -188,29 +193,88 @@ class Handler(BaseHTTPRequestHandler):
             work.put(jobs[job_id])
             return self._send(200, {"id": job_id})
         if url.path == "/api/open":
-            target = pipeline.OUTPUT
-            if q.get("folder"):
-                f = (pipeline.OUTPUT / q["folder"]).resolve()
-                if f.parent == pipeline.OUTPUT.resolve() and f.is_dir():
-                    target = f
+            target = model_folder(q.get("folder")) or pipeline.OUTPUT
             target.mkdir(parents=True, exist_ok=True)
             os.startfile(target)
             return self._send(200, {"ok": True})
+        if url.path in ("/api/mirror", "/api/choose"):
+            folder = model_folder(q.get("folder"))
+            if not folder or not (folder / "model.glb").exists():
+                return self._send(404, {"error": "That model isn't there any more."})
+            original = folder / "original.glb"
+            if not original.exists():
+                shutil.copyfile(folder / "model.glb", original)  # so the untouched model can always come back
+            if url.path == "/api/mirror":
+                try:
+                    with mirror_lock:
+                        symmetry.make_versions(folder)
+                except Exception as e:
+                    traceback.print_exc()
+                    return self._send(500, {"error": f"Couldn't mirror this model: {e}"})
+                return self._send(200, {"ok": True})
+            version = q.get("version")
+            if version not in VERSIONS or not (folder / f"{version}.glb").exists():
+                return self._send(400, {"error": "Pick one of the versions first."})
+            shutil.copyfile(folder / f"{version}.glb", folder / "model.glb")
+            for f in ("mirror-a.glb", "mirror-b.glb"):
+                (folder / f).unlink(missing_ok=True)
+            info = folder / "info.json"
+            meta = json.loads(info.read_text(encoding="utf-8")) if info.exists() else {}
+            meta["mirrored"] = version != "original"
+            meta["faces"] = trellis_engine.normalize_glb(folder / "model.glb", count_only=True)
+            info.write_text(json.dumps(meta), encoding="utf-8")
+            return self._send(200, summary(folder))
         self._send(404, {"error": "not found"})
+
+
+def model_folder(name):
+    """output/<name> if that's really one of the model folders, else None."""
+    if not name or name.startswith("."):
+        return None
+    f = (pipeline.OUTPUT / name).resolve()
+    return f if f.parent == pipeline.OUTPUT.resolve() and f.is_dir() else None
+
+
+class Server(ThreadingHTTPServer):
+    # Python turns on SO_REUSEADDR, which on Windows lets a second copy of the app bind the same port and answer
+    # half of the first one's requests. Claim the port exclusively instead.
+    allow_reuse_address = False
+    daemon_threads = True
+
+    def server_bind(self):
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def already_running(port):
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=1) as r:
+            return "engines" in json.loads(r.read())
+    except (OSError, ValueError):
+        return False
 
 
 def main():
     pipeline.OUTPUT.mkdir(parents=True, exist_ok=True)
-    shutil.rmtree(UPLOADS, ignore_errors=True)
+    first = int(os.environ.get("IMAGE_TO_3D_PORT", 7861))
+    if "IMAGE_TO_3D_PORT" not in os.environ and already_running(first):
+        # one copy at a time, so two never fight over the GPU: just show the one that's open
+        print(f"Image to 3D is already open at http://127.0.0.1:{first}/")
+        webbrowser.open(f"http://127.0.0.1:{first}/")
+        return
+    for old in UPLOADS.glob("*"):  # leftovers from a crash
+        if time.time() - old.stat().st_mtime > 86400:
+            old.unlink(missing_ok=True)
     server = None
-    for port in range(7861, 7881):
+    for port in range(first, first + 20):
         try:
-            server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            server = Server(("127.0.0.1", port), Handler)
             break
         except OSError:
             continue
     if server is None:
-        raise SystemExit("No free port between 7861 and 7880.")
+        raise SystemExit(f"No free port between {first} and {first + 19}.")
     url = f"http://127.0.0.1:{server.server_port}/"
     threading.Thread(target=worker, daemon=True).start()
     print(f"\n  Image to 3D is running at {url}\n  Keep this window open while you use it. Close it to quit.\n", flush=True)

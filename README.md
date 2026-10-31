@@ -28,6 +28,12 @@ Detailed objects take longer, because TRELLIS.2 spends about half its time clean
 - **Game-ready**: about 20,000 triangles and a 1024 px texture. Usually under 2 MB, so it's fine to embed in the game.
 - **Full detail**: TRELLIS.2's own settings (up to 300,000 triangles, 2048 px texture). Much bigger files.
 
+### Fixing the side the AI couldn't see
+
+The AI only sees one side of the object, so it has to guess the other side. Sometimes it guesses wrong, for example a car with wheels on one side only. For things that are the same on both sides (cars, robots, people, trophies), click **Fix it by mirroring** under the finished model. It makes two versions, each copying one half onto the other. Spin the model around, flip between **Side A**, **Side B** and **Original**, then click **Keep this one**. Side A is usually the right one. The untouched model is kept as `original.glb`, so you can always switch back.
+
+Mirroring flips any writing on the object, so skip it for things with text or logos.
+
 ### Tips for good results
 
 - Use one object, seen from the front or slightly above, with nothing covering it.

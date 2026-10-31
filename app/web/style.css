@@ -88,6 +88,14 @@ button:hover, .button:hover { border-color: var(--accent); }
 .result span { color: var(--muted); margin-left: 8px; }
 .result code { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-all; }
 .buttons { display: flex; gap: 8px; }
+.mirror {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); font-size: 14px;
+}
+.pick { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg { padding: 7px 12px; }
+.seg.on { border-color: var(--accent); background: #1d3358; }
+.pick .primary { padding: 7px 14px; }
 
 .gallery-wrap { padding: 0 24px 24px; }
 @media (max-width: 860px) { .gallery-wrap { padding: 0 16px 16px; } }

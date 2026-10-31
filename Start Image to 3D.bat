@@ -8,4 +8,4 @@ if not exist ".venv\Scripts\python.exe" (
   exit /b 1
 )
 ".venv\Scripts\python.exe" app\server.py
-pause
+if errorlevel 1 pause
