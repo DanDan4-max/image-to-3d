@@ -65,6 +65,14 @@ Mirroring flips any writing on the object, so skip it for things with text or lo
 - The AI has to guess the back of the object, so a 3/4 view shows it more than a flat side view.
 - Don't like a result? Run it again. Each run is free.
 
+## Taking your models to a Chromebook
+
+The AI needs this PC's graphics card, but your models can go anywhere. Under **Your models**, click **Take models to a Chromebook**, tick the models you want, and click **Make the file**. You get one file, `output\3D models for Chromebook.html`, with a 3D viewer and the models inside.
+
+Copy that file to the Chromebook (USB stick, Google Drive or OneDrive) and open it from the Files app. It runs straight from the file, with no internet, installs or commands. Click a model to spin it, click **Download .glb** to save it, and open **Where it came from and its license** for credits. **Open .glb files** shows any other `.glb` on the Chromebook too.
+
+The file is about 1.3 times the size of the models in it. Game-ready models (about 1 MB each) open fastest on old Chromebooks. Full-detail ones (about 11 MB, 300,000 triangles) work too, but take a few seconds.
+
 ## Putting a model in the Rocket League game
 
 1. Copy the model's folder into the game as `assets\hq\explosions\<name>\`, so the file ends up at `assets/hq/explosions/<name>/model.glb`. Include its `license.txt`.

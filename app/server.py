@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+import chromebook
 import picture_ai
 import pipeline
 import symmetry
@@ -257,6 +258,22 @@ class Handler(BaseHTTPRequestHandler):
                 upload=str(upload), source_name=q.get("filename", "")[:120], credit=q.get("credit", "")[:400],
                 cutout=cutout_file(q.get("cutout")) if q.get("remove_bg", "1") != "0" else None)
             return self._send(200, {"id": job_id})
+        if url.path == "/api/chromebook":
+            size = int(self.headers.get("Content-Length") or 0)
+            try:
+                names = json.loads(self.rfile.read(size)).get("folders", []) if 0 < size < 100000 else []
+            except ValueError:
+                names = []
+            folders = [f for f in (model_folder(str(n)) for n in names) if f and (f / "model.glb").exists()]
+            if not folders:
+                return self._send(400, {"error": "Pick at least one model."})
+            dest = pipeline.OUTPUT / "3D models for Chromebook.html"
+            try:
+                n = chromebook.build(folders, dest)
+            except Exception as e:
+                traceback.print_exc()
+                return self._send(500, {"error": f"Couldn't make the file: {e}"})
+            return self._send(200, {"path": str(dest), "size": n, "count": len(folders)})
         if url.path == "/api/fetch":
             size = int(self.headers.get("Content-Length") or 0)
             try:

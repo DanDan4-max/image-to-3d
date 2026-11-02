@@ -158,6 +158,13 @@ button:hover, .button:hover { border-color: var(--accent); }
 }
 .web-card.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
 a { color: var(--accent); }
+.cb-list { display: flex; flex-direction: column; gap: 4px; max-height: 45vh; overflow-y: auto; }
+.cb-list label {
+  display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: #10141b; cursor: pointer;
+}
+.cb-list img { width: 40px; height: 40px; object-fit: contain; }
+.cb-list span { flex: 1; }
+.cb-list small { color: var(--muted); }
 .ed-busy {
   position: absolute; inset: 0; background: #0b0e13b0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 8px; padding: 20px; text-align: center;

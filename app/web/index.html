@@ -132,7 +132,10 @@
   <section class="gallery-wrap">
     <div class="gallery-head">
       <h2>Your models</h2>
-      <button id="openAll" class="link">Open output folder</button>
+      <div class="row">
+        <button id="chromebookBtn" class="button">Take models to a Chromebook</button>
+        <button id="openAll" class="link">Open output folder</button>
+      </div>
     </div>
     <div id="gallery" class="gallery"></div>
     <p class="tip">To use one in your Rocket League game, copy its folder to <code>assets/hq/explosions/&lt;name&gt;/</code>
@@ -165,6 +168,26 @@
         <button id="edFix" class="button">Fix it</button>
         <button id="edUse" class="primary">Use this picture</button>
       </div>
+    </div>
+  </div>
+
+  <div id="chromebook" class="editor" hidden>
+    <div class="editor-box" role="dialog" aria-label="Take models to a Chromebook">
+      <div class="editor-head">
+        <h2>Take models to a Chromebook</h2>
+        <button id="cbClose" class="link">Close</button>
+      </div>
+      <p class="muted">Makes one HTML file with a 3D viewer and the models you tick inside it. Copy that file to the
+        Chromebook (USB stick, Google Drive or OneDrive), open it from the Files app, and you can spin and download every
+        model. No internet, installs or commands needed.</p>
+      <div class="row"><button id="cbAll" class="link">Tick all</button><button id="cbNone" class="link">Untick all</button></div>
+      <div id="cbList" class="cb-list"></div>
+      <div class="row end">
+        <span id="cbTotal" class="muted"></span>
+        <button id="cbMake" class="primary">Make the file</button>
+      </div>
+      <p id="cbResult" class="muted" hidden></p>
+      <div class="row end"><button id="cbOpen" class="button" hidden>Open the folder with the file</button></div>
     </div>
   </div>
 

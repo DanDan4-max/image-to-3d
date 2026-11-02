@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My 3D models</title>
+<!-- Made by Image to 3D. One file with the viewer and the models inside: open it straight from the Files app
+     (file://), no internet, no installs, no commands. -->
+<style>
+  :root { --bg: #0f1218; --panel: #171c25; --line: #2a3140; --text: #e7ebf2; --muted: #9aa4b5; --accent: #3d8bff; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { margin: 0; font-size: 19px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  button, .button { font: inherit; border-radius: 8px; padding: 8px 13px; cursor: pointer; border: 1px solid var(--line);
+    background: #222a38; color: var(--text); text-decoration: none; display: inline-block; }
+  button:hover, .button:hover { border-color: var(--accent); }
+  .primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  main { display: grid; grid-template-columns: 300px 1fr; gap: 14px; padding: 14px 16px; }
+  @media (max-width: 760px) { main { grid-template-columns: 1fr; } .list { max-height: 260px; } }
+  .list { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; align-content: start;
+    max-height: calc(100vh - 100px); overflow-y: auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 7px; cursor: pointer;
+    text-align: left; color: var(--text); font-size: 13px; }
+  .card img, .card .noimg { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; margin-bottom: 5px;
+    background: repeating-conic-gradient(#1b212c 0% 25%, #151a22 0% 50%) 50% / 16px 16px; border-radius: 6px; }
+  .card small { color: var(--muted); display: block; }
+  .card.on { border-color: var(--accent); }
+  .right { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .viewer { position: relative; height: min(68vh, 640px); min-height: 300px; border-radius: 12px; overflow: hidden;
+    background: radial-gradient(circle at 50% 35%, #263042, #12161d 70%); }
+  .viewer canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .hint { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; margin: 0;
+    color: var(--muted); padding: 20px; text-align: center; }
+  .bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .bar span { color: var(--muted); margin-left: 6px; }
+  pre { white-space: pre-wrap; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+    color: var(--muted); font-size: 12px; margin: 0; }
+  body.drag .viewer { outline: 3px dashed var(--accent); outline-offset: -6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>My 3D models</h1>
+  <span id="count" class="muted"></span>
+  <span style="flex:1"></span>
+  <label class="button">Open .glb files<input id="files" type="file" accept=".glb,model/gltf-binary" multiple hidden></label>
+</header>
+<main>
+  <div id="list" class="list"></div>
+  <div class="right">
+    <div id="viewer" class="viewer"><p id="hint" class="hint">Pick a model, or drop .glb files here. Drag to spin, scroll or pinch to zoom.</p></div>
+    <div id="bar" class="bar" hidden>
+      <div><b id="name"></b><span id="info"></span></div>
+      <button id="download" class="primary">Download .glb</button>
+    </div>
+    <details id="licenseBox" hidden><summary class="muted">Where it came from and its license</summary><pre id="license"></pre></details>
+  </div>
+</main>
+
+<script>/*BUNDLE*/</script>
+<script>
+(function () {
+  var MODELS = /*MODELS*/[];
+  var $ = function (id) { return document.getElementById(id); };
+  if (!window.V3) { $('hint').textContent = 'This browser could not start the 3D viewer.'; return; }
+  var THREE = V3.THREE;
+
+  // ---------- 3D view (kept light for old Chromebooks: capped pixel ratio, draws only while something moves) ----------
+  var box = $('viewer'), renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  } catch (e) {
+    $('hint').textContent = "This computer's browser can't show 3D (WebGL 2 is off or missing). You can still download the models.";
+  }
+  var scene = new THREE.Scene(), camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100), controls, shown = null;
+  if (renderer) {
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    box.prepend(renderer.domElement);
+    scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new V3.RoomEnvironment(), 0.04).texture;
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 0.6));
+    var sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(2, 3, 2);
+    scene.add(sun);
+    controls = new V3.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.autoRotate = true;
+    controls.autoRotateSpeed = 1.5;
+    renderer.domElement.addEventListener('pointerdown', function () { controls.autoRotate = false; });
+    var resize = function () {
+      renderer.setSize(box.clientWidth, box.clientHeight, false);
+      camera.aspect = box.clientWidth / Math.max(box.clientHeight, 1);
+      camera.updateProjectionMatrix();
+    };
+    window.addEventListener('resize', resize);
+    resize();
+    renderer.setAnimationLoop(function () { if (shown) { controls.update(); renderer.render(scene, camera); } });
+  }
+
+  function show(bytes) {
+    if (!renderer) return;
+    $('hint').hidden = false;
+    $('hint').textContent = 'Opening…';
+    new V3.GLTFLoader().parse(bytes, '', function (gltf) {
+      if (shown) scene.remove(shown);
+      shown = gltf.scene;
+      var b = new THREE.Box3().setFromObject(shown), size = b.getSize(new THREE.Vector3()), c = b.getCenter(new THREE.Vector3());
+      var s = 1 / Math.max(size.x, size.y, size.z, 1e-6);
+      shown.scale.setScalar(s);
+      shown.position.set(-c.x * s, -b.min.y * s, -c.z * s);
+      scene.add(shown);
+      var r = size.length() * s / 2, dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov / 2)) * 0.85;
+      controls.target.set(0, size.y * s / 2, 0);
+      camera.position.set(dist * 0.55, size.y * s / 2 + dist * 0.35, dist * 0.76);
+      controls.autoRotate = true;
+      $('hint').hidden = true;
+    }, function () { $('hint').textContent = "Couldn't open that model."; });
+  }
+
+  // ---------- the models inside this file ----------
+  var current = null;
+  function bytesOf(i) {  // the model is stored as text (base64) in a <script> tag; turn it back into bytes
+    return fetch('data:model/gltf-binary;base64,' + $('glb-' + i).textContent.trim()).then(function (r) { return r.arrayBuffer(); });
+  }
+  function mb(n) { return (n / 1e6).toFixed(1) + ' MB'; }
+  function select(item, card) {
+    var cards = document.querySelectorAll('.card');
+    for (var k = 0; k < cards.length; k++) cards[k].classList.toggle('on', cards[k] === card);
+    current = item;
+    $('bar').hidden = false;
+    $('name').textContent = item.name;
+    $('info').textContent = [item.engine, item.faces ? item.faces.toLocaleString() + ' triangles' : '', mb(item.size)].filter(Boolean).join(' · ');
+    $('licenseBox').hidden = !item.license;
+    $('license').textContent = item.license || '';
+    item.bytes().then(function (b) { item.cached = b; show(b); });
+  }
+  function addCard(item) {
+    var card = document.createElement('button');
+    card.className = 'card';
+    var pic;
+    if (item.thumb) { pic = document.createElement('img'); pic.src = item.thumb; pic.alt = ''; }
+    else { pic = document.createElement('div'); pic.className = 'noimg'; }
+    var label = document.createElement('div');
+    label.textContent = item.name;
+    var small = document.createElement('small');
+    small.textContent = [item.engine, mb(item.size)].filter(Boolean).join(' · ');
+    card.append(pic, label, small);
+    card.addEventListener('click', function () { select(item, card); });
+    $('list').appendChild(card);
+    return card;
+  }
+  MODELS.forEach(function (m, i) { m.bytes = function () { return bytesOf(i); }; addCard(m); });
+  $('count').textContent = MODELS.length ? MODELS.length + ' model' + (MODELS.length > 1 ? 's' : '') + ' inside this file' : '';
+  if (!MODELS.length) $('hint').textContent = 'Drop .glb files here, or click "Open .glb files". Drag to spin, scroll or pinch to zoom.';
+
+  $('download').addEventListener('click', function () {
+    if (!current) return;
+    current.bytes().then(function (b) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([b], { type: 'model/gltf-binary' }));
+      a.download = current.name + '.glb';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    });
+  });
+
+  // ---------- .glb files from this computer ----------
+  function openFiles(list) {
+    var first = null;
+    Array.prototype.forEach.call(list, function (f) {
+      if (!/\.glb$/i.test(f.name)) return;
+      var item = { name: f.name.replace(/\.glb$/i, ''), size: f.size, engine: 'your file', bytes: function () { return f.arrayBuffer(); } };
+      var card = addCard(item);
+      if (!first) first = [item, card];
+    });
+    if (first) select(first[0], first[1]);
+  }
+  $('files').addEventListener('change', function (e) { openFiles(e.target.files); });
+  document.addEventListener('dragover', function (e) { e.preventDefault(); document.body.classList.add('drag'); });
+  document.addEventListener('dragleave', function () { document.body.classList.remove('drag'); });
+  document.addEventListener('drop', function (e) { e.preventDefault(); document.body.classList.remove('drag'); openFiles(e.dataTransfer.files); });
+
+  // the model data comes after this script in the file, so wait until the browser has read all of it
+  document.addEventListener('DOMContentLoaded', function () {
+    var first = document.querySelector('.card');
+    if (first) first.click();
+  });
+})();
+</script>
+<!--GLBS-->
+</body>
+</html>

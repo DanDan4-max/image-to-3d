@@ -447,6 +447,64 @@ $('crUse').addEventListener('click', async () => {
 });
 $('cropPicture').addEventListener('click', () => picked && openCropper(pickedUrl, $('name').value || 'model'));
 
+// ---------- take models to a Chromebook ----------
+// One HTML file with a viewer and the ticked models inside, which works when opened straight from file://.
+const cbTotal = () => {
+  const ticked = [...document.querySelectorAll('#cbList input:checked')];
+  const bytes = ticked.reduce((s, i) => s + Number(i.dataset.size), 0);
+  $('cbTotal').textContent = ticked.length
+    ? `${ticked.length} model${ticked.length > 1 ? 's' : ''}, about ${(bytes * 1.34 / 1e6 + 0.8).toFixed(0)} MB file` +
+      (bytes > 150e6 ? ' (big: old Chromebooks may be slow to open it)' : '')
+    : 'Tick the models to take';
+  $('cbMake').disabled = !ticked.length;
+};
+$('chromebookBtn').addEventListener('click', async () => {
+  const list = await api('/api/recent').catch(() => []);
+  $('cbList').replaceChildren(...list.map((r) => {
+    const row = document.createElement('label');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = true;
+    box.value = r.folder;
+    box.dataset.size = r.size;
+    box.addEventListener('change', cbTotal);
+    const img = document.createElement('img');
+    img.src = `/files/${encodeURIComponent(r.folder)}/cutout.png`;
+    img.alt = '';
+    img.onerror = () => { img.style.visibility = 'hidden'; };
+    const name = document.createElement('span');
+    name.textContent = r.folder;
+    const size = document.createElement('small');
+    size.textContent = [r.engine_label, `${(r.size / 1e6).toFixed(1)} MB`].filter(Boolean).join(' · ');
+    row.append(box, img, name, size);
+    return row;
+  }));
+  $('cbResult').hidden = $('cbOpen').hidden = true;
+  cbTotal();
+  $('chromebook').hidden = false;
+});
+$('cbAll').addEventListener('click', () => { document.querySelectorAll('#cbList input').forEach((b) => { b.checked = true; }); cbTotal(); });
+$('cbNone').addEventListener('click', () => { document.querySelectorAll('#cbList input').forEach((b) => { b.checked = false; }); cbTotal(); });
+$('cbClose').addEventListener('click', () => { $('chromebook').hidden = true; });
+$('cbMake').addEventListener('click', async () => {
+  const folders = [...document.querySelectorAll('#cbList input:checked')].map((b) => b.value);
+  const btn = $('cbMake');
+  btn.disabled = true;
+  btn.textContent = 'Making the file…';
+  try {
+    const r = await api('/api/chromebook', { method: 'POST', body: JSON.stringify({ folders }) });
+    $('cbResult').textContent = `Done: ${r.count} model${r.count > 1 ? 's' : ''}, ${(r.size / 1e6).toFixed(1)} MB, saved as ${r.path}. ` +
+      'Copy that one file to your Chromebook and open it from the Files app.';
+    $('cbResult').hidden = $('cbOpen').hidden = false;
+  } catch (e) {
+    $('cbResult').textContent = e.message;
+    $('cbResult').hidden = false;
+  }
+  btn.textContent = 'Make the file';
+  btn.disabled = false;
+});
+$('cbOpen').addEventListener('click', () => api('/api/open', { method: 'POST' }));
+
 // ---------- clean up with AI ----------
 // The picture AI redraws the picture as a clean studio render of the same object. Screenshots and photos have
 // reflections, odd lighting and blur that TRELLIS.2 bakes into the model; a clean render gives a much cleaner model.
