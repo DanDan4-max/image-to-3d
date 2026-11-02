@@ -22,6 +22,10 @@ TRELLIS_EXE = "https://github.com/pwilkin/trellis.cpp/releases/download/v0.8.1/t
 SDCPP_EXE = ("https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1030-0a06712/"
              "sd-master-0a06712-bin-win-vulkan-x64.zip")
 TRELLIS_Q8 = "https://huggingface.co/ilintar/trellis2-gguf/resolve/main/q8/{}.gguf"
+# for the Chromebook file (see cloud.py): Cloudflare's tunnel and its tool for putting the site up
+CLOUDFLARED = "https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-windows-amd64.exe"
+CLOUDFLARED_SHA256 = "86aee4017b26625cee8484c113558f48effa4cd47f7aa05fcf425604e5d2b23c"
+WRANGLER = "wrangler@4.149.0"
 DOWNLOADS = [  # (url, where it goes)
     ("https://huggingface.co/stabilityai/TripoSR/resolve/main/config.yaml", MODELS / "TripoSR" / "config.yaml"),
     ("https://huggingface.co/stabilityai/TripoSR/resolve/main/model.ckpt", MODELS / "TripoSR" / "model.ckpt"),
@@ -68,7 +72,8 @@ def pip(*args):
 
 def main():
     print("This downloads about 24 GB in total: AMD's PyTorch (2 GB), helper libraries (0.5 GB), TripoSR (1.9 GB),\n"
-          "TRELLIS.2 (10 GB) and the FLUX.2 [klein] picture AI (9 GB). Everything stays in this folder.")
+          "TRELLIS.2 (10 GB), the FLUX.2 [klein] picture AI (9 GB) and Cloudflare's tools for the Chromebook file\n"
+          "(0.2 GB). Everything stays in this folder.")
     if input("Continue? [Y/n] ").strip().lower().startswith("n"):
         return
 
@@ -109,6 +114,25 @@ def main():
         with zipfile.ZipFile(zpath) as z:
             z.extractall(sd.parent)
         zpath.unlink()
+
+    tunnel = ROOT / "engines" / "cloudflared" / "cloudflared.exe"
+    if not tunnel.exists():
+        say("Getting cloudflared (the link from your Cloudflare site to this PC, for the Chromebook file)")
+        fetch(CLOUDFLARED, tunnel)
+        import hashlib
+        if hashlib.sha256(tunnel.read_bytes()).hexdigest() != CLOUDFLARED_SHA256:
+            tunnel.unlink()
+            raise SystemExit("cloudflared didn't download correctly. Run Setup.bat again.")
+    wrangler = ROOT / "engines" / "wrangler"
+    if not (wrangler / "node_modules" / "wrangler").exists():
+        import shutil
+        if shutil.which("npm"):
+            say("Getting wrangler (puts your models on your Cloudflare site)")
+            wrangler.mkdir(parents=True, exist_ok=True)
+            (wrangler / "package.json").write_text('{"name": "i3d-wrangler", "private": true}\n')
+            subprocess.check_call(["npm", "install", "--no-fund", "--no-audit", WRANGLER], cwd=wrangler, shell=True)
+        else:
+            say("Skipping wrangler: install Node.js from nodejs.org first if you want the Chromebook file")
 
     say("Downloading the AI models (resumes where it left off if you run Setup again)")
     for url, dest in DOWNLOADS:

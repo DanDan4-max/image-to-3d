@@ -12,6 +12,13 @@
     <h1>Image to 3D</h1>
     <span id="status" class="pill">Starting…</span>
   </header>
+  <form id="passForm" class="pass" hidden>
+    <span id="passText"></span>
+    <div class="row">
+      <input id="passInput" type="text" autocomplete="off" spellcheck="false" maxlength="40" placeholder="Passcode, e.g. abcd-efgh-jkmn">
+      <button class="primary">OK</button>
+    </div>
+  </form>
 
   <main>
     <section class="panel left">
@@ -105,11 +112,11 @@
         <div>
           <b id="resultName"></b>
           <span id="resultInfo"></span>
-          <code id="resultPath"></code>
+          <code id="resultPath" class="pc-only"></code>
         </div>
         <div class="buttons">
           <a id="download" class="button" download>Download .glb</a>
-          <button id="openFolder" class="button">Open folder</button>
+          <button id="openFolder" class="button pc-only">Open folder</button>
         </div>
       </div>
       <div id="fixModelBar" class="mirror" hidden>
@@ -132,13 +139,13 @@
   <section class="gallery-wrap">
     <div class="gallery-head">
       <h2>Your models</h2>
-      <div class="row">
+      <div class="row pc-only">
         <button id="chromebookBtn" class="button">Take models to a Chromebook</button>
         <button id="openAll" class="link">Open output folder</button>
       </div>
     </div>
     <div id="gallery" class="gallery"></div>
-    <p class="tip">To use one in your Rocket League game, copy its folder to <code>assets/hq/explosions/&lt;name&gt;/</code>
+    <p class="tip pc-only">To use one in your Rocket League game, copy its folder to <code>assets/hq/explosions/&lt;name&gt;/</code>
       (so the file is <code>model.glb</code> there), then ask the game's Claude session to hook it up.</p>
   </section>
 
@@ -172,22 +179,38 @@
   </div>
 
   <div id="chromebook" class="editor" hidden>
-    <div class="editor-box" role="dialog" aria-label="Take models to a Chromebook">
+    <div class="editor-box" role="dialog" aria-label="Take Image to 3D to a Chromebook">
       <div class="editor-head">
-        <h2>Take models to a Chromebook</h2>
+        <h2>Take Image to 3D to a Chromebook</h2>
         <button id="cbClose" class="link">Close</button>
       </div>
-      <p class="muted">Makes one HTML file with a 3D viewer and the models you tick inside it. Copy that file to the
-        Chromebook (USB stick, Google Drive or OneDrive), open it from the Files app, and you can spin and download every
-        model. No internet, installs or commands needed.</p>
-      <div class="row"><button id="cbAll" class="link">Tick all</button><button id="cbNone" class="link">Untick all</button></div>
-      <div id="cbList" class="cb-list"></div>
-      <div class="row end">
-        <span id="cbTotal" class="muted"></span>
-        <button id="cbMake" class="primary">Make the file</button>
+      <p class="muted">One small file runs this whole app on the Chromebook, straight from the Files app. It gets your
+        models from your own free Cloudflare site, and makes new ones with this PC's AI while this PC is on with
+        Image to 3D open. No installs or commands on the Chromebook.</p>
+
+      <h3>1. Put your models on Cloudflare</h3>
+      <p id="cbSiteText" class="muted"></p>
+      <div class="row">
+        <button id="cbSetup" class="button">Connect Cloudflare</button>
+        <button id="cbUpdate" class="button" hidden>Update now</button>
+      </div>
+      <label class="check"><input id="cbAuto" type="checkbox"> Put new models online by themselves</label>
+      <details>
+        <summary class="muted">Choose which models go online</summary>
+        <div class="row"><button id="cbAll" class="link">Tick all</button><button id="cbNone" class="link">Untick all</button></div>
+        <div id="cbList" class="cb-list"></div>
+      </details>
+
+      <h3>2. Make models from the Chromebook</h3>
+      <label class="check"><input id="cbMakeOn" type="checkbox"> Let the Chromebook file use this PC's AI, through Cloudflare</label>
+      <p id="cbPassText" class="muted"></p>
+
+      <h3>3. The Chromebook file</h3>
+      <div class="row">
+        <button id="cbMake" class="primary">Make the Chromebook file</button>
+        <button id="cbOpen" class="button" hidden>Open the folder with the file</button>
       </div>
       <p id="cbResult" class="muted" hidden></p>
-      <div class="row end"><button id="cbOpen" class="button" hidden>Open the folder with the file</button></div>
     </div>
   </div>
 

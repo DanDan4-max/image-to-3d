@@ -18,7 +18,9 @@ repository.
 | DINO ViT-B/16 config (used by TripoSR) | Meta | Apache-2.0 | `models/hf-cache/` |
 | u2net (background removal for TripoSR), via rembg | Xuebin Qin et al.; Daniel Gatis | Apache-2.0; MIT | `models/u2net/` |
 | PyTorch for Windows with ROCm | PyTorch Foundation; AMD | BSD-3-Clause; AMD's ROCm licenses | `.venv/` |
-| three.js (3D preview, and the Chromebook viewer file) | three.js authors | MIT | `app/web/vendor/three/` (`three-viewer.iife.js` is three.js with its glTF loader, orbit controls and room environment bundled into one script with esbuild) |
+| three.js (3D preview, and the Chromebook file) | three.js authors | MIT | `app/web/vendor/three/` (`three-viewer.iife.js` is three.js with its glTF loader, orbit controls and room environment bundled into one script with esbuild) |
+| cloudflared 2026.10.0 (the link from the Cloudflare site to this PC) | Cloudflare | Apache-2.0 | `engines/cloudflared/` |
+| wrangler 4.149.0 (puts the models on the user's Cloudflare site) | Cloudflare | MIT OR Apache-2.0 | `engines/wrangler/` |
 | trimesh, xatlas, moderngl, scikit-image, SciPy, Pillow and others | their authors | MIT / BSD / similar | `.venv/` |
 
 `_rasterize_positions` in `app/pipeline.py` is adapted from TripoSR's `tsr/bake_texture.py` (MIT, Tripo AI and

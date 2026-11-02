@@ -1,6 +1,8 @@
 """The Image to 3D app: a small web page on this PC only (http://127.0.0.1:7861) that talks to the AI models.
 
-Nothing is sent anywhere: the page, the AI and the files all stay on this computer.
+Nothing is sent anywhere unless the user turns on the Chromebook parts (see cloud.py): then the models go up to their
+own Cloudflare site, and the Chromebook file can use this app through Cloudflare (port 7891), but only with the
+passcode.
 """
 import gc
 import json
@@ -20,6 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 import chromebook
+import cloud
 import picture_ai
 import pipeline
 import symmetry
@@ -32,6 +35,13 @@ FILES = {"model.glb", "cutout.png", "license.txt", "original.glb", "mirror-a.glb
 VERSIONS = {"original", "mirror-a", "mirror-b"}
 IMAGE_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/bmp": ".bmp", "image/gif": ".gif"}
 ENGINES = {"trellis-1024": "TRELLIS.2", "trellis-512": "TRELLIS.2 (faster)", "triposr": "TripoSR draft"}
+
+REMOTE_PORT = 7891
+PC_ONLY = {"/api/open", "/api/chromebook", "/api/cloud", "/api/cloud/setup", "/api/cloud/publish", "/api/cloud/settings"}
+CHROMEBOOK_FILE = "Image to 3D for Chromebook.html"
+remote = {"server": None, "error": None}
+remote_lock = threading.Lock()
+wrong_codes = {}  # who -> times they typed a wrong passcode, to slow down guessing
 
 jobs = {}
 work = queue.Queue()
@@ -97,6 +107,7 @@ def worker():
             if job.get("credit"):
                 add_credit(r.folder, job["credit"])
             job.update(state="done", result=summary(r.folder))
+            cloud.publish_later(all_models)
         except Exception as e:
             traceback.print_exc()
             job.update(state="error", error=str(e) if isinstance(e, pipeline.NoObjectError) else f"Something went wrong: {e}")
@@ -141,25 +152,64 @@ def summary(folder):
             "engine_label": ENGINES.get(meta.get("engine"), ""), **meta}
 
 
-def recent():
+def recent(limit=40):
     if not pipeline.OUTPUT.exists():
         return []
     folders = [f for f in pipeline.OUTPUT.iterdir() if (f / "model.glb").exists()]
     folders.sort(key=lambda f: (f / "model.glb").stat().st_mtime, reverse=True)
-    return [summary(f) for f in folders[:40]]
+    return [summary(f) for f in folders[:limit]]
+
+
+def all_models():
+    return recent(limit=10000)
+
+
+# ---------- the Chromebook file: making models from it, through Cloudflare ----------
+def set_remote(on):
+    """Open (or close) the Chromebook's way in: a door on this PC only (127.0.0.1), plus a Cloudflare tunnel to it."""
+    with remote_lock:
+        if on and not remote["server"]:
+            server = None
+            for port in range(REMOTE_PORT, REMOTE_PORT + 10):
+                try:
+                    server = Server(("127.0.0.1", port), RemoteHandler)
+                    break
+                except OSError:
+                    continue
+            if server is None:
+                remote["error"] = f"No free port between {REMOTE_PORT} and {REMOTE_PORT + 9}."
+                return
+            remote.update(server=server, error=None)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            cloud.tunnel.start(server.server_port)
+        elif not on and remote["server"]:
+            cloud.tunnel.stop()
+            remote["server"].shutdown()
+            remote["server"].server_close()
+            remote["server"] = None
+        cloud.settings["make"] = on
+        cloud.save()
+
+
+def cloud_info():
+    return {**cloud.info(), "remote_error": remote["error"], "count": len(all_models())}
 
 
 class Handler(BaseHTTPRequestHandler):
+    remote = False  # True for RemoteHandler: a request from the Chromebook file, through Cloudflare
+
     def log_message(self, fmt, *args):
         pass
 
-    def _send(self, code, body=b"", kind="application/json"):
+    def _send(self, code, body=b"", kind="application/json", headers=()):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -173,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
             kind = "model/gltf-binary"
         self._send(200, path.read_bytes(), kind)
 
-    def _local_only(self):
+    def _allowed(self):
         # only this PC's own page may use the app (stops other websites from poking at it)
         host = (self.headers.get("Host") or "").split(":")[0]
         if host not in ("127.0.0.1", "localhost") or (self.command == "POST" and self.headers.get("X-Image-To-3D") != "1"):
@@ -182,18 +232,25 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):
-        if not self._local_only():
+        if not self._allowed():
             return
         p = unquote(urlparse(self.path).path)
+        if self.remote and p in PC_ONLY:
+            return self._send(403, {"error": "That only works on the PC itself."})
         if p == "/":
             return self._file(WEB / "index.html")
+        if p == "/api/cloud":
+            return self._send(200, cloud_info())
         if p.startswith("/web/"):
             target = (WEB / p[5:]).resolve()
             return self._file(target) if WEB.resolve() in target.parents else self._send(404, {"error": "not found"})
         if p == "/api/status":
-            return self._send(200, status())
+            s = {**status(), "remote": self.remote}
+            if self.remote:
+                s.pop("output")  # where the files are on the PC is no business of the internet
+            return self._send(200, s)
         if p == "/api/recent":
-            return self._send(200, recent())
+            return self._send(200, all_models() if "all=1" in urlparse(self.path).query else recent())
         if p == "/api/search":
             q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
             try:
@@ -219,10 +276,12 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not found"})
 
     def do_POST(self):
-        if not self._local_only():
+        if not self._allowed():
             return
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
+        if self.remote and url.path in PC_ONLY:
+            return self._send(403, {"error": "That only works on the PC itself."})
         if url.path in ("/api/jobs", "/api/cutout"):
             ext = IMAGE_TYPES.get((self.headers.get("Content-Type") or "").split(";")[0].strip())
             size = int(self.headers.get("Content-Length") or 0)
@@ -259,21 +318,39 @@ class Handler(BaseHTTPRequestHandler):
                 cutout=cutout_file(q.get("cutout")) if q.get("remove_bg", "1") != "0" else None)
             return self._send(200, {"id": job_id})
         if url.path == "/api/chromebook":
-            size = int(self.headers.get("Content-Length") or 0)
+            if not cloud.settings.get("site"):
+                return self._send(400, {"error": "Set up Cloudflare first (step 1)."})
+            dest = pipeline.OUTPUT / CHROMEBOOK_FILE
             try:
-                names = json.loads(self.rfile.read(size)).get("folders", []) if 0 < size < 100000 else []
-            except ValueError:
-                names = []
-            folders = [f for f in (model_folder(str(n)) for n in names) if f and (f / "model.glb").exists()]
-            if not folders:
-                return self._send(400, {"error": "Pick at least one model."})
-            dest = pipeline.OUTPUT / "3D models for Chromebook.html"
-            try:
-                n = chromebook.build(folders, dest)
+                dest.write_text(chromebook.build(cloud.settings["site"]), encoding="utf-8")
             except Exception as e:
                 traceback.print_exc()
                 return self._send(500, {"error": f"Couldn't make the file: {e}"})
-            return self._send(200, {"path": str(dest), "size": n, "count": len(folders)})
+            return self._send(200, {"path": str(dest), "size": dest.stat().st_size})
+        if url.path in ("/api/cloud/setup", "/api/cloud/publish"):
+            if not cloud.installed():
+                return self._send(400, {"error": "Cloudflare's tools aren't installed. Run Setup.bat."})
+            if cloud.state["busy"]:
+                return self._send(409, {"error": "Already working on it."})
+            run = cloud.setup if url.path == "/api/cloud/setup" or not cloud.settings.get("site") else cloud.publish
+            threading.Thread(target=run, args=(all_models(),), daemon=True).start()
+            return self._send(200, cloud_info())
+        if url.path == "/api/cloud/settings":
+            size = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(size)) if 0 < size < 100000 else {}
+            except ValueError:
+                body = {}
+            if not isinstance(body, dict):
+                return self._send(400, {"error": "Bad request."})
+            if "auto" in body:
+                cloud.settings["auto"] = bool(body["auto"])
+            if isinstance(body.get("skip"), list):
+                cloud.settings["skip"] = [str(s) for s in body["skip"] if model_folder(str(s))]
+            cloud.save()
+            if "make" in body:
+                set_remote(bool(body["make"]))
+            return self._send(200, cloud_info())
         if url.path == "/api/fetch":
             size = int(self.headers.get("Content-Length") or 0)
             try:
@@ -339,6 +416,7 @@ class Handler(BaseHTTPRequestHandler):
             meta["mirrored"] = version != "original"
             meta["faces"] = trellis_engine.normalize_glb(folder / "model.glb", count_only=True)
             info.write_text(json.dumps(meta), encoding="utf-8")
+            cloud.publish_later(all_models)
             return self._send(200, summary(folder))
         self._send(404, {"error": "not found"})
 
@@ -395,6 +473,56 @@ def model_folder(name):
     return f if f.parent == pipeline.OUTPUT.resolve() and f.is_dir() else None
 
 
+NOT_HERE = b"""<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Image to 3D</title><body style="font:16px/1.5 system-ui,sans-serif;background:#0f1218;color:#e7ebf2;padding:24px">
+<h1 style="font-size:20px">This is the way in to someone's Image to 3D</h1>
+<p>It only works from their own <b>Image to 3D for Chromebook</b> file, with their passcode.</p></body>"""
+
+
+class RemoteHandler(Handler):
+    """Requests from the Chromebook file, which arrive through the Cloudflare tunnel. The same app, but every request
+    needs the passcode (in an X-Key header: the file runs from file://, so cookies don't work)."""
+    remote = True
+
+    def end_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")  # the file's file:// page is another origin
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Image-To-3D, X-Key")
+        self.send_header("Access-Control-Max-Age", "7200")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _allowed(self):
+        path = urlparse(self.path).path
+        if path == "/ping":  # the Cloudflare site checking that the PC is really there
+            self._send(200, {"ok": True})
+            return False
+        if not path.startswith(("/api/", "/files/", "/uploads/")):
+            self._send(404, NOT_HERE, "text/html; charset=utf-8")
+            return False
+        who = self.headers.get("Cf-Connecting-Ip") or self.client_address[0]
+        now = time.time()
+        tries = [t for t in wrong_codes.get(who, []) if now - t < 900]
+        if len(tries) >= 8:
+            self._send(429, {"error": "Too many wrong passcodes. Wait 15 minutes, then try again."})
+            return False
+        given = self.headers.get("X-Key") or ""
+        if not cloud.same_code(given):
+            if given:
+                tries.append(now)
+            wrong_codes[who] = tries
+            self._send(401, {"error": "Type the passcode from your PC.", "passcode": "wrong" if given else "missing"})
+            return False
+        if self.command == "POST" and self.headers.get("X-Image-To-3D") != "1":
+            self._send(403, {"error": "Not from the app's own page."})
+            return False
+        return True
+
+
 class Server(ThreadingHTTPServer):
     # Python turns on SO_REUSEADDR, which on Windows lets a second copy of the app bind the same port and answer
     # half of the first one's requests. Claim the port exclusively instead.
@@ -438,12 +566,18 @@ def main():
     url = f"http://127.0.0.1:{server.server_port}/"
     threading.Thread(target=worker, daemon=True).start()
     print(f"\n  Image to 3D is running at {url}\n  Keep this window open while you use it. Close it to quit.\n", flush=True)
+    cloud.load()
+    if cloud.settings.get("make") and os.environ.get("IMAGE_TO_3D_NO_CLOUD") != "1":
+        set_remote(True)
     if os.environ.get("IMAGE_TO_3D_NO_BROWSER") != "1":
         webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if cloud.tunnel.on:
+            cloud.tunnel.stop()
 
 
 if __name__ == "__main__":

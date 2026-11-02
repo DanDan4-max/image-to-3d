@@ -65,13 +65,22 @@ Mirroring flips any writing on the object, so skip it for things with text or lo
 - The AI has to guess the back of the object, so a 3/4 view shows it more than a flat side view.
 - Don't like a result? Run it again. Each run is free.
 
-## Taking your models to a Chromebook
+## Using it on a Chromebook
 
-The AI needs this PC's graphics card, but your models can go anywhere. Under **Your models**, click **Take models to a Chromebook**, tick the models you want, and click **Make the file**. You get one file, `output\3D models for Chromebook.html`, with a 3D viewer and the models inside.
+One small file (`output\Image to 3D for Chromebook.html`, under 1 MB) runs this whole app on a Chromebook, straight from the Files app: no installs and no commands. Everything on the main page works in it: making models from pictures, words or the web, highlight and fix, mirroring, and downloading.
 
-Copy that file to the Chromebook (USB stick, Google Drive or OneDrive) and open it from the Files app. It runs straight from the file, with no internet, installs or commands. Click a model to spin it, click **Download .glb** to save it, and open **Where it came from and its license** for credits. **Open .glb files** shows any other `.glb` on the Chromebook too.
+- **Your models** come from your own free Cloudflare site, so they're there any time, even with the PC off.
+- **Making new ones** uses this PC's AI, through a secure Cloudflare link, while the PC is on with Image to 3D open. The first time, the file asks for this PC's passcode. You type it once on each Chromebook.
 
-The file is about 1.3 times the size of the models in it. Game-ready models (about 1 MB each) open fastest on old Chromebooks. Full-detail ones (about 11 MB, 300,000 triangles) work too, but take a few seconds.
+To set it up, click **Take models to a Chromebook** under **Your models** on the PC:
+
+1. **Put your models on Cloudflare.** Sign up for free at cloudflare.com if you haven't, then click **Connect Cloudflare**. A Cloudflare page opens: log in and click **Allow**. With **Put new models online by themselves** ticked, every new model goes up on its own. Under **Choose which models go online** you can leave some out (then click **Update now**).
+2. **Make models from the Chromebook.** Tick **Let the Chromebook file use this PC's AI**. The passcode shows up there.
+3. Click **Make the Chromebook file**, copy the file to the Chromebook (USB stick, Google Drive or OneDrive), and open it from the Files app. You only do this once, because new models show up in it by themselves.
+
+Who can see what: anyone who has your site's address can see and download the models you put online, so only put up models you're allowed to share. Using the PC's AI always needs the passcode, and after 8 wrong tries someone has to wait 15 minutes. Untick step 2 to close the link to your PC.
+
+The Chromebook needs internet for this. Game-ready models (about 1 MB each) open fastest on old Chromebooks. Full-detail ones (about 11 MB) work too, but take a few seconds.
 
 ## Putting a model in the Rocket League game
 
@@ -92,6 +101,7 @@ Training an image-to-3D AI from scratch isn't something one PC can do, so this i
 - **FLUX.2 [klein] 4B** (Black Forest Labs, **Apache 2.0**) draws pictures from words and redraws highlighted parts, with **Qwen3-4B** (Alibaba, Apache 2.0) reading the words. It runs through **stable-diffusion.cpp** (leejet, MIT) on Vulkan. On Radeon RX 9000 cards that build's Vulkan code turns the compressed (Q8) weights into noise, so the app has it convert them to F16 while loading.
 - **TripoSR** (Tripo AI and Stability AI, **MIT license**) for quick drafts, run with AMD's PyTorch for Windows (ROCm 7.2.1). Background removal uses **u2net** through `rembg` (MIT and Apache-2.0).
 - The 3D preview uses **three.js** (MIT).
+- The Chromebook file uses Cloudflare's **wrangler** (MIT or Apache-2.0) to put your site up, and **cloudflared** (Apache-2.0) for the link to your PC. Both are free tools from Cloudflare.
 
 Models I checked and left out: Hunyuan3D (Tencent license with region limits) and Stable Fast 3D (Stability Community License, not MIT).
 
@@ -108,6 +118,7 @@ What's where:
 - `app\`: the tool's own code (the page, the server, and the two AI engines).
 - `engines\trellis\`: trellis.cpp (TRELLIS.2 for Vulkan).
 - `engines\sdcpp\`: stable-diffusion.cpp (the picture AI for Vulkan).
+- `engines\cloudflared\`, `engines\wrangler\`: Cloudflare's tools for the Chromebook file (wrangler needs Node.js from nodejs.org).
 - `vendor\TripoSR\`: TripoSR's code.
 - `models\`: the AI weights (about 21 GB).
 - `output\`: your models.

@@ -4,12 +4,53 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const $ = (id) => document.getElementById(id);
+
+// In the Chromebook file (window.I3D, see chromebook.py) this page runs from file://: the models come from the
+// Cloudflare site, and everything else goes to the PC through its Cloudflare tunnel, with the passcode.
+const SITE = window.I3D ? window.I3D.site : null;
+const OFF = "Your PC isn't on, or Image to 3D isn't open on it. Your models still work: look at them and download them.";
+let base = SITE ? null : '';  // where the PC's app answers: '' is this page's own server, null is "not found yet"
+let passcode = '';
+if (SITE) {
+  document.body.classList.add('file-mode');
+  try { passcode = localStorage.getItem('image-to-3d-passcode') || ''; } catch {}
+}
+function call(path, opts = {}) {
+  if (base === null) return Promise.reject(new Error(OFF));
+  const headers = { 'X-Image-To-3D': '1', ...(passcode ? { 'X-Key': passcode } : {}), ...(opts.headers || {}) };
+  return fetch(base + path, { ...opts, headers }).then((r) => {
+    if (r.status === 401 && SITE) askPasscode(passcode ? 'That passcode is wrong. Check it on your PC.' : '');
+    return r;
+  }, () => { throw new Error(SITE ? OFF : "Can't reach the app. Start it again with Start Image to 3D.bat"); });
+}
 const api = (path, opts = {}) =>
-  fetch(path, { ...opts, headers: { 'X-Image-To-3D': '1', ...(opts.headers || {}) } }).then(async (r) => {
+  call(path, opts).then(async (r) => {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
     return data;
   });
+// A URL an <img> or the 3D loader can use for a file on the PC. With a passcode (which an <img> can't send) the
+// file is downloaded first.
+async function pcFile(path) {
+  if (!SITE) return path;
+  const r = await call(path);
+  if (!r.ok) throw new Error(`Error ${r.status}`);
+  return URL.createObjectURL(await r.blob());
+}
+// r: a model, from the gallery or a finished job. r.online: it came from the Cloudflare site.
+function modelFile(r, file, fresh = false) {
+  const name = encodeURIComponent(r.folder);
+  if (r.online) return Promise.resolve(`${SITE}/m/${name}/${file === 'cutout.png' ? 'thumb.webp' : file}`);
+  return pcFile(`/files/${name}/${file}${fresh ? `?t=${Date.now()}` : ''}`);
+}
+async function saveFile(url, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(await (await fetch(url)).blob());
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
 
 // ---------- 3D viewer ----------
 const box = $('viewer');
@@ -44,8 +85,14 @@ new ResizeObserver(resize).observe(box);
 renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
 
 // keepView: swap the model but leave the camera where it is (for comparing versions from the same angle)
-function show(folder, file = 'model.glb', keepView = false) {
-  new GLTFLoader().load(`/files/${encodeURIComponent(folder)}/${file}?t=${Date.now()}`, (gltf) => {
+async function show(r, file = 'model.glb', keepView = false) {
+  let url;
+  try {
+    url = await modelFile(r, file, true);
+  } catch (e) {
+    return showError(e.message);
+  }
+  new GLTFLoader().load(url, (gltf) => {
     if (shown) scene.remove(shown);
     shown = gltf.scene;
     // fit whatever size the model is into view, sitting on the ground
@@ -63,9 +110,8 @@ function show(folder, file = 'model.glb', keepView = false) {
     controls.autoRotate = true;
   }, undefined, () => showError('Could not open that model.'));
   const cut = $('cutout');
-  cut.src = `/files/${encodeURIComponent(folder)}/cutout.png`;
-  cut.hidden = false;
   cut.onerror = () => { cut.hidden = true; };
+  modelFile(r, 'cutout.png').then((u) => { cut.src = u; cut.hidden = false; }, () => { cut.hidden = true; });
 }
 
 // ---------- picking a picture ----------
@@ -121,8 +167,9 @@ async function refreshCutout() {
   updateButton();
   try {
     const r = await api('/api/cutout', { method: 'POST', body: file, headers: { 'Content-Type': file.type } });
+    const url = await pcFile(r.url);
     if (ticket !== cutting) return;  // a newer picture was picked meanwhile
-    cutout = { file, id: r.id, url: r.url, upscaled: r.upscaled };
+    cutout = { file, id: r.id, url, upscaled: r.upscaled };
   } catch (e) {
     if (ticket !== cutting) return;
     cutout = { file, failed: true };
@@ -160,7 +207,7 @@ async function pickFromWeb(link, credit = '', name = '') {
   $('dropText').hidden = false;
   $('dropText').textContent = 'Getting the picture…';
   try {
-    const r = await fetch('/api/fetch', { method: 'POST', headers: { 'X-Image-To-3D': '1' }, body: JSON.stringify({ url: link }) });
+    const r = await call('/api/fetch', { method: 'POST', body: JSON.stringify({ url: link }) });
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `Error ${r.status}`);
     const blob = await r.blob();
     const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp' }[blob.type] || 'png';
@@ -175,24 +222,57 @@ async function pickFromWeb(link, credit = '', name = '') {
 
 // ---------- status ----------
 let status = {};
+let lastFind = 0;
+async function findPc() {
+  // the PC's tunnel address changes every time it starts, so ask the Cloudflare site where it is now
+  if (Date.now() - lastFind < 12000) return;
+  lastFind = Date.now();
+  const r = await fetch(`${SITE}/pc`, { cache: 'no-store' }).then((x) => x.json()).catch(() => ({}));
+  if (r.url && base === null) {
+    base = r.url;
+    loadGallery();
+  }
+}
 async function poll() {
+  if (SITE && base === null) await findPc();
+  const pill = $('status');
   try {
     status = await api('/api/status');
-    const pill = $('status');
     pill.className = 'pill' + (status.ready ? ' ok' : status.problems.length ? ' bad' : '');
-    pill.textContent = status.ready ? `Ready · ${status.device}` : status.problems[0] || 'Starting the AI…';
+    pill.textContent = status.ready ? `Ready · ${SITE ? "using your PC's " : ''}${status.device}` : status.problems[0] || 'Starting the AI…';
     for (const input of document.querySelectorAll('input[name=engine]')) {
       const ok = status.engines[input.value.split('-')[0]];
       input.disabled = ok === false;
     }
-    $('tabWords').disabled = !canDraw();
-    $('tabWords').title = canDraw() ? '' : "The picture AI isn't installed. Run Setup.bat.";
-  } catch {
-    $('status').textContent = 'The app window was closed. Start it again with Start Image to 3D.bat';
-    $('status').className = 'pill bad';
+    if (SITE) $('passForm').hidden = true;
+  } catch (e) {
+    status = {};
+    if (SITE && !$('passForm').hidden) {
+      pill.textContent = 'Type the passcode from your PC to make models';
+      pill.className = 'pill';
+    } else {
+      if (SITE) base = null;  // look for the PC again (it may have restarted at a new address)
+      pill.textContent = SITE ? 'Your PC is off · your models still work' : e.message;
+      pill.title = SITE ? OFF : '';
+      pill.className = 'pill bad';
+    }
   }
+  $('tabWords').disabled = !canDraw();
+  $('tabWords').title = canDraw() ? '' : status.engines ? "The picture AI isn't installed. Run Setup.bat." : OFF;
   updateButton();
 }
+function askPasscode(text) {
+  $('passForm').hidden = false;
+  $('passText').textContent = text || 'Your PC asks for its passcode (you only type it once on this computer). ' +
+    'It\'s on the PC: Image to 3D → Take models to a Chromebook.';
+}
+$('passForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  passcode = $('passInput').value.trim();
+  try { localStorage.setItem('image-to-3d-passcode', passcode); } catch {}
+  $('passText').textContent = 'Checking…';
+  poll().then(() => { if (!$('passForm').hidden) return; loadGallery(); });
+});
 setInterval(poll, 3000);
 poll();
 
@@ -241,16 +321,16 @@ function setStep(text, frac, started) {
 let current = null;
 function done(r) {
   current = r;
-  show(r.folder);
+  show(r);
   $('resultBar').hidden = false;
   $('resultName').textContent = r.folder;
   const bits = [r.engine_label, r.faces && `${r.faces.toLocaleString()} triangles`, `${(r.size / 1e6).toFixed(1)} MB`, r.seconds && `${Math.round(r.seconds)} s`];
   $('resultInfo').textContent = bits.filter(Boolean).join(' · ');
   $('resultPath').textContent = r.path;
-  $('download').href = `/files/${encodeURIComponent(r.folder)}/model.glb`;
+  $('download').href = SITE ? '#' : `/files/${encodeURIComponent(r.folder)}/model.glb`;
   $('download').download = `${r.folder}.glb`;
   $('fixModelBar').hidden = !canDraw();
-  $('mirrorBar').hidden = false;
+  $('mirrorBar').hidden = !status.engines;  // needs the PC
   $('mirrorBtn').hidden = false;
   $('mirrorPick').hidden = true;
   $('mirrorText').textContent = r.mirrored
@@ -265,7 +345,7 @@ let picking = 'mirror-a';
 function pickVersion(v) {
   picking = v;
   for (const s of document.querySelectorAll('#mirrorPick .seg')) s.classList.toggle('on', s.dataset.v === v);
-  show(current.folder, v + '.glb', true);
+  show(current, v + '.glb', true);
 }
 $('mirrorBtn').addEventListener('click', async () => {
   const b = $('mirrorBtn');
@@ -273,6 +353,7 @@ $('mirrorBtn').addEventListener('click', async () => {
   b.textContent = 'Mirroring… (a few seconds)';
   try {
     await api('/api/mirror?folder=' + encodeURIComponent(current.folder), { method: 'POST' });
+    current = { ...current, online: false };  // the mirrored versions are only on the PC
     b.hidden = true;
     $('mirrorText').textContent = 'Spin it around and pick the one that looks right:';
     $('mirrorPick').hidden = false;
@@ -292,16 +373,35 @@ $('mirrorKeep').addEventListener('click', async () => {
 });
 $('openFolder').addEventListener('click', () => current && api('/api/open?folder=' + encodeURIComponent(current.folder), { method: 'POST' }));
 $('openAll').addEventListener('click', () => api('/api/open', { method: 'POST' }));
+$('download').addEventListener('click', async (e) => {
+  if (!SITE || !current) return;  // on the PC the link downloads by itself
+  e.preventDefault();
+  try {
+    await saveFile(await modelFile(current, 'model.glb'), `${current.folder}.glb`);
+  } catch (err) {
+    showError(err.message);
+  }
+});
 
 // ---------- gallery ----------
 async function loadGallery() {
-  const list = await api('/api/recent').catch(() => []);
+  let list = [];
+  if (SITE) {
+    // the models on the Cloudflare site, plus any new ones on the PC that aren't up there yet
+    list = await fetch(`${SITE}/models.json`, { cache: 'no-store' }).then((r) => r.json()).catch(() => []);
+    list = list.map((m) => ({ ...m, online: true }));
+    const pc = base === null ? [] : await api('/api/recent').catch(() => []);
+    const there = new Set(list.map((m) => m.folder));
+    list = [...pc.filter((m) => !there.has(m.folder)), ...list];
+  } else {
+    list = await api('/api/recent').catch(() => []);
+  }
   const g = $('gallery');
   g.replaceChildren(...list.map((r) => {
     const card = document.createElement('button');
     card.className = 'card' + (current && current.folder === r.folder ? ' active' : '');
     const img = document.createElement('img');
-    img.src = `/files/${encodeURIComponent(r.folder)}/cutout.png`;
+    modelFile(r, 'cutout.png').then((u) => { img.src = u; }, () => { img.style.visibility = 'hidden'; });
     img.alt = '';
     const name = document.createElement('div');
     name.textContent = r.folder;
@@ -328,7 +428,7 @@ async function waitJob(id, onStep) {
 }
 const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').split('-').slice(0, 5).join('-') || 'model';
 async function urlToFile(url, name) {
-  const blob = await (await fetch(url)).blob();
+  const blob = await (await call(url)).blob();
   return new File([blob], name, { type: blob.type || 'image/png' });
 }
 
@@ -447,27 +547,67 @@ $('crUse').addEventListener('click', async () => {
 });
 $('cropPicture').addEventListener('click', () => picked && openCropper(pickedUrl, $('name').value || 'model'));
 
-// ---------- take models to a Chromebook ----------
-// One HTML file with a viewer and the ticked models inside, which works when opened straight from file://.
-const cbTotal = () => {
-  const ticked = [...document.querySelectorAll('#cbList input:checked')];
-  const bytes = ticked.reduce((s, i) => s + Number(i.dataset.size), 0);
-  $('cbTotal').textContent = ticked.length
-    ? `${ticked.length} model${ticked.length > 1 ? 's' : ''}, about ${(bytes * 1.34 / 1e6 + 0.8).toFixed(0)} MB file` +
-      (bytes > 150e6 ? ' (big: old Chromebooks may be slow to open it)' : '')
-    : 'Tick the models to take';
-  $('cbMake').disabled = !ticked.length;
-};
+// ---------- take Image to 3D to a Chromebook ----------
+// 1. the models go up to the user's own Cloudflare site, 2. a Cloudflare tunnel lets the Chromebook file use this PC
+// (with the passcode), 3. one small HTML file runs the whole app from file:// (see cloud.py and chromebook.py).
+let cb = {}, cbTimer = null;
+function cbShow() {
+  const text = $('cbSiteText');
+  text.classList.toggle('error', !!cb.error);
+  if (!cb.installed) text.textContent = "Cloudflare's tools aren't installed. Run Setup.bat.";
+  else if (cb.busy) {
+    text.textContent = cb.busy + ' ';
+    if (cb.login_url) {
+      const a = document.createElement('a');
+      a.href = cb.login_url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = "Open Cloudflare's login page";
+      text.append(a);
+    }
+  }
+  else if (cb.error) text.textContent = cb.error;
+  else if (!cb.site) {
+    text.textContent = "Not set up yet. If you don't have a Cloudflare account, sign up for free at cloudflare.com first. " +
+      'Then click Connect Cloudflare: a Cloudflare page opens in your browser; log in there and click Allow.';
+  } else {
+    text.textContent = `Online: ${cb.online.length} of your ${cb.count} models. Anyone who has your site's address ` +
+      `(${cb.site}) can see them, so only put models online that you're allowed to share.`;
+  }
+  $('cbSetup').hidden = !!cb.site && !cb.error;
+  $('cbSetup').textContent = cb.site ? 'Try again' : 'Connect Cloudflare';
+  $('cbUpdate').hidden = !cb.site;
+  $('cbSetup').disabled = $('cbUpdate').disabled = !cb.installed || !!cb.busy;
+  $('cbAuto').checked = cb.auto;
+  $('cbMakeOn').checked = cb.make;
+  $('cbMakeOn').disabled = !cb.site;
+  const pass = $('cbPassText');
+  pass.classList.toggle('error', !!(cb.tunnel_error || cb.remote_error));
+  if (!cb.site) pass.textContent = 'Do step 1 first.';
+  else if (!cb.make) pass.textContent = 'Off: the Chromebook file can only show and download your models.';
+  else if (cb.remote_error || cb.tunnel_error) pass.textContent = cb.remote_error || cb.tunnel_error;
+  else if (!cb.tunnel) pass.textContent = 'Connecting to Cloudflare…';
+  else {
+    pass.innerHTML = 'On. Passcode: <b class="code"></b> (type it once on the Chromebook). It works while this PC is on ' +
+      'with Image to 3D open.';
+    pass.querySelector('.code').textContent = cb.passcode;
+  }
+  $('cbMake').disabled = !cb.site;
+}
+async function cbRefresh() {
+  cb = await api('/api/cloud').catch((e) => ({ ...cb, error: e.message }));
+  cbShow();
+}
 $('chromebookBtn').addEventListener('click', async () => {
-  const list = await api('/api/recent').catch(() => []);
+  await cbRefresh();
+  const list = await api('/api/recent?all=1').catch(() => []);
   $('cbList').replaceChildren(...list.map((r) => {
     const row = document.createElement('label');
     const box = document.createElement('input');
     box.type = 'checkbox';
-    box.checked = true;
+    box.checked = !cb.skip.includes(r.folder);
     box.value = r.folder;
-    box.dataset.size = r.size;
-    box.addEventListener('change', cbTotal);
+    box.addEventListener('change', cbSkip);
     const img = document.createElement('img');
     img.src = `/files/${encodeURIComponent(r.folder)}/cutout.png`;
     img.alt = '';
@@ -480,27 +620,41 @@ $('chromebookBtn').addEventListener('click', async () => {
     return row;
   }));
   $('cbResult').hidden = $('cbOpen').hidden = true;
-  cbTotal();
   $('chromebook').hidden = false;
+  clearInterval(cbTimer);
+  cbTimer = setInterval(() => { if ($('chromebook').hidden) clearInterval(cbTimer); else cbRefresh(); }, 2000);
 });
-$('cbAll').addEventListener('click', () => { document.querySelectorAll('#cbList input').forEach((b) => { b.checked = true; }); cbTotal(); });
-$('cbNone').addEventListener('click', () => { document.querySelectorAll('#cbList input').forEach((b) => { b.checked = false; }); cbTotal(); });
+const cbSettings = async (body) => { cb = await api('/api/cloud/settings', { method: 'POST', body: JSON.stringify(body) }); cbShow(); };
+function cbSkip() {
+  const skip = [...document.querySelectorAll('#cbList input')].filter((b) => !b.checked).map((b) => b.value);
+  cbSettings({ skip }).then(() => { if (cb.site) $('cbSiteText').textContent += ' Click Update now to apply your ticks.'; });
+}
+$('cbAll').addEventListener('click', () => { document.querySelectorAll('#cbList input').forEach((b) => { b.checked = true; }); cbSkip(); });
+$('cbNone').addEventListener('click', () => { document.querySelectorAll('#cbList input').forEach((b) => { b.checked = false; }); cbSkip(); });
 $('cbClose').addEventListener('click', () => { $('chromebook').hidden = true; });
+$('cbSetup').addEventListener('click', async () => {
+  try { cb = await api('/api/cloud/setup', { method: 'POST' }); } catch (e) { cb.error = e.message; }
+  cbShow();
+});
+$('cbUpdate').addEventListener('click', async () => {
+  try { cb = await api('/api/cloud/publish', { method: 'POST' }); } catch (e) { cb.error = e.message; }
+  cbShow();
+});
+$('cbAuto').addEventListener('change', () => cbSettings({ auto: $('cbAuto').checked }));
+$('cbMakeOn').addEventListener('change', () => cbSettings({ make: $('cbMakeOn').checked }));
 $('cbMake').addEventListener('click', async () => {
-  const folders = [...document.querySelectorAll('#cbList input:checked')].map((b) => b.value);
   const btn = $('cbMake');
   btn.disabled = true;
-  btn.textContent = 'Making the file…';
   try {
-    const r = await api('/api/chromebook', { method: 'POST', body: JSON.stringify({ folders }) });
-    $('cbResult').textContent = `Done: ${r.count} model${r.count > 1 ? 's' : ''}, ${(r.size / 1e6).toFixed(1)} MB, saved as ${r.path}. ` +
-      'Copy that one file to your Chromebook and open it from the Files app.';
+    const r = await api('/api/chromebook', { method: 'POST' });
+    $('cbResult').textContent = `Done: saved as ${r.path} (${(r.size / 1e6).toFixed(1)} MB). Copy that one file to your ` +
+      'Chromebook (USB stick, Google Drive or OneDrive) and open it from the Files app. You only need to do this ' +
+      'once: new models show up in it by themselves.';
     $('cbResult').hidden = $('cbOpen').hidden = false;
   } catch (e) {
     $('cbResult').textContent = e.message;
     $('cbResult').hidden = false;
   }
-  btn.textContent = 'Make the file';
   btn.disabled = false;
 });
 $('cbOpen').addEventListener('click', () => api('/api/open', { method: 'POST' }));
@@ -652,7 +806,7 @@ $('edFix').addEventListener('click', async () => {
     const { id } = await api('/api/edit', { method: 'POST', body: JSON.stringify({ prompt, image: before, mask: maskDataUrl(), seed: -1 }) });
     const r = await waitJob(id, (job) => { $('edStep').textContent = job.step; $('edBar').style.width = `${Math.round(job.progress * 100)}%`; });
     const img = new Image();
-    img.src = r.image;
+    img.src = await pcFile(r.image);
     await img.decode();
     ed.history.push(before);
     edImage.getContext('2d').drawImage(img, 0, 0, edImage.width, edImage.height);

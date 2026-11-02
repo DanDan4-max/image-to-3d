@@ -173,3 +173,13 @@ a { color: var(--accent); }
 .ed-busy .bar div { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .4s; }
 input[type=range] { vertical-align: middle; accent-color: var(--accent); }
 code { font-family: Consolas, monospace; }
+h3 { margin: 6px 0 0; font-size: 15px; }
+.muted.error { color: var(--error); }
+.code { font-family: Consolas, monospace; color: var(--text); font-size: 15px; letter-spacing: .5px; }
+.file-mode .pc-only { display: none !important; }
+.pass {
+  display: flex; flex-direction: column; gap: 8px; margin: 16px 24px 0; padding: 12px 14px; border-radius: 10px;
+  background: #1d3358; border: 1px solid var(--accent);
+}
+.pass .row input { flex: 1; min-width: 0; }
+@media (max-width: 860px) { .pass { margin: 16px 16px 0; } }

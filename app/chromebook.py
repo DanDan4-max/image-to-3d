@@ -1,60 +1,39 @@
-"""One HTML file with a 3D viewer and the chosen models inside, for a Chromebook (or any computer): copy the file
-over, open it from the Files app (file://), and it works with no internet, installs or commands.
+"""The whole app as one HTML file for a Chromebook (or any computer): open it straight from the Files app (file://).
 
-Browsers won't let a file:// page read other local files, so everything is packed into the one file: the viewer
-(three.js, bundled into app/web/vendor/three/three-viewer.iife.js) and each model as base64 text.
+It's the same page as on the PC (index.html, style.css, app.js), packed into one file, because a file:// page can't
+load other local files. In it, the models come from your Cloudflare site, and making new ones goes to this PC
+through Cloudflare, with the passcode (see cloud.py).
 """
-import base64
-import io
 import json
-import time
+import re
 from pathlib import Path
 
-from PIL import Image
-
 WEB = Path(__file__).resolve().parent / "web"
-ENGINES = {"trellis-1024": "TRELLIS.2", "trellis-512": "TRELLIS.2 (faster)", "triposr": "TripoSR draft"}
+IMPORTS = """import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+"""
 
 
-def _thumb(folder):
-    """A small see-through picture of the model for its card, or None."""
-    cut = folder / "cutout.png"
-    if not cut.exists():
-        return None
-    img = Image.open(cut).convert("RGBA")
-    if img.getbbox():
-        img = img.crop(img.getbbox())
-    img.thumbnail((160, 160), Image.LANCZOS)
-    buf = io.BytesIO()
-    img.save(buf, format="WEBP", quality=80)
-    return "data:image/webp;base64," + base64.b64encode(buf.getvalue()).decode()
+def _inline(text):
+    return text.replace("</script", "<\\/script")  # nothing inside may close the <script> tag early
 
 
-def build(folders, dest):
-    """Write the viewer file with the models from `folders` (each holding a model.glb). Returns its size in bytes."""
-    bundle = (WEB / "vendor" / "three" / "three-viewer.iife.js").read_text(encoding="utf-8")
-    template = (WEB / "chromebook.html").read_text(encoding="utf-8")
-    meta, blobs = [], []
-    for i, folder in enumerate(folders):
-        glb = folder / "model.glb"
-        info = {}
-        try:
-            info = json.loads((folder / "info.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            pass
-        lic = folder / "license.txt"
-        meta.append({
-            "name": folder.name, "size": glb.stat().st_size, "faces": info.get("faces"),
-            "engine": ENGINES.get(info.get("engine"), ""), "thumb": _thumb(folder),
-            "license": lic.read_text(encoding="utf-8") if lic.exists() else "",
-            "made": time.strftime("%Y-%m-%d", time.localtime(glb.stat().st_mtime)),
-        })
-        blobs.append(f'<script type="text/plain" id="glb-{i}">{base64.b64encode(glb.read_bytes()).decode()}</script>')
-    # nothing inside may close the <script> tags early
-    bundle = bundle.replace("</script", "<\\/script")
-    models = json.dumps(meta).replace("</", "<\\/")
-    html = (template.replace("/*BUNDLE*/", bundle, 1)
-            .replace("/*MODELS*/[]", models, 1)
-            .replace("<!--GLBS-->", "\n".join(blobs), 1))
-    Path(dest).write_text(html, encoding="utf-8")
-    return Path(dest).stat().st_size
+def build(site):
+    """The file's HTML, with `site` (https://image-to-3d.<you>.workers.dev) as where it finds models and the PC."""
+    page = (WEB / "index.html").read_text(encoding="utf-8")
+    app = (WEB / "app.js").read_text(encoding="utf-8")
+    if not app.startswith(IMPORTS):
+        raise RuntimeError("app.js's imports changed; update chromebook.IMPORTS")
+    # three.js comes as one plain script (vendor/three/three-viewer.iife.js, which sets window.V3) instead of imports
+    app = ("(() => {\n'use strict';\nconst THREE = V3.THREE, { GLTFLoader, OrbitControls, RoomEnvironment } = V3;\n"
+           + app[len(IMPORTS):] + "\n})();")
+    scripts = (f"<script>window.I3D = {json.dumps({'site': site})};</script>\n"
+               f"<script>{_inline((WEB / 'vendor' / 'three' / 'three-viewer.iife.js').read_text(encoding='utf-8'))}</script>\n"
+               f"<script>{_inline(app)}</script>")
+    css = (WEB / "style.css").read_text(encoding="utf-8")
+    page = page.replace('<link rel="stylesheet" href="/web/style.css">', f"<style>\n{css}</style>", 1)
+    page = re.sub(r'\s*<script type="importmap">.*?</script>', "", page, count=1, flags=re.S)
+    page = page.replace('<script type="module" src="/web/app.js"></script>', scripts, 1)
+    return page
