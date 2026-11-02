@@ -57,6 +57,8 @@ Mirroring flips any writing on the object, so skip it for things with text or lo
 
 ### Tips for good results
 
+- **Try "Clean up with AI".** Under the picture, it redraws your picture as a clean studio render of the same object: sharp, evenly lit, no reflections. Screenshots and photos have glare and blur that the 3D AI bakes into the model as blotches, so this usually gives a much cleaner model. It can change small details (in testing, a car's black roof came out silver), so look before you click Make, and use **Back to the original** if you don't like it.
+- **Small pictures are sharpened automatically.** Anything under 768 pixels gets enlarged 4x with Real-ESRGAN first, since tiny web thumbnails make mushy models. The cut-out note tells you when that happened. Bigger, sharper pictures still work best.
 - **Check the cut-out.** Right after you pick a picture, the page shows exactly what the AI will see, on a see-through checkerboard. Anything missing there comes out wrong in 3D. For example, in a Rocket League screenshot the grass hides the bottom of the tires, so the wheels come out mangled. Use a picture where the whole object shows: the car mid-jump, on a flat floor, or a clean render.
 - Use one object, seen from the front or slightly above, with nothing covering it.
 - A plain background helps, but the background is removed automatically.

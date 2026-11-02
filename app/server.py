@@ -236,13 +236,13 @@ class Handler(BaseHTTPRequestHandler):
             upload.write_bytes(self.rfile.read(size))
             try:
                 with cutout_lock:
-                    make_cutout(upload, UPLOADS / f"{cut_id}.png")
+                    upscaled = make_cutout(upload, UPLOADS / f"{cut_id}.png")
             except Exception as e:
                 traceback.print_exc()
                 return self._send(500, {"error": str(e) if isinstance(e, pipeline.NoObjectError) else f"Couldn't cut it out: {e}"})
             finally:
                 upload.unlink(missing_ok=True)
-            return self._send(200, {"id": cut_id, "url": f"/uploads/{cut_id}.png"})
+            return self._send(200, {"id": cut_id, "url": f"/uploads/{cut_id}.png", "upscaled": upscaled})
         if url.path == "/api/jobs":
             engine = q.get("engine") if q.get("engine") in ENGINES else "trellis-1024"
             if not engines()["triposr" if engine == "triposr" else "trellis"]:
@@ -352,15 +352,22 @@ def cutout_file(cut_id):
 
 def make_cutout(picture, dest):
     """Cut the object out with TRELLIS.2's own remover (BiRefNet), or TripoSR's if TRELLIS.2 isn't installed.
-    While a model is being made the GPU is busy, so the remover runs on the CPU instead (slower, same result)."""
-    if trellis_engine.available():
-        busy = any(j["state"] == "running" for j in jobs.values())
-        return trellis_engine.cutout_only(picture, dest, cpu=busy)
-    import rembg
-    from PIL import Image, ImageOps
-    img = ImageOps.exif_transpose(Image.open(picture)).convert("RGBA")
-    rembg.remove(img, session=rembg.new_session("u2net")).save(dest)
-    return dest
+    While a model is being made the GPU is busy, so the remover runs on the CPU instead (slower, same result).
+    Small pictures get sharpened 4x first; returns whether that happened."""
+    up = dest.with_name(dest.stem + "-up.png")
+    big = picture_ai.upscale_if_small(picture, up)
+    try:
+        if trellis_engine.available():
+            busy = any(j["state"] == "running" for j in jobs.values())
+            trellis_engine.cutout_only(big, dest, cpu=busy)
+        else:
+            import rembg
+            from PIL import Image, ImageOps
+            img = ImageOps.exif_transpose(Image.open(big)).convert("RGBA")
+            rembg.remove(img, session=rembg.new_session("u2net")).save(dest)
+    finally:
+        up.unlink(missing_ok=True)
+    return Path(big) != Path(picture)
 
 
 def model_folder(name):

@@ -85,7 +85,10 @@ def generate(image_path, name=None, res=1024, size="game", remove_bg=True, progr
     glb = folder / "model.glb"
 
     picture = folder / "input.png"
-    has_alpha = upright_png(cutout or image_path, picture)
+    import picture_ai
+    src = picture_ai.upscale_if_small(cutout or image_path, folder / "upscaled.png")
+    has_alpha = upright_png(src, picture)
+    (folder / "upscaled.png").unlink(missing_ok=True)
 
     # --fa-fast: Radeon cards have no BF16 in Vulkan, so trellis.cpp's default attention precision crawls; F16 runs
     # about 3x faster with the same look (checked side by side on an RX 9070 XT)

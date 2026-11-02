@@ -83,7 +83,9 @@ function pick(file, credit = '') {
   $('name').value = (file.name || 'pasted').replace(/\.[^.]+$/, '').replace(/[^a-z0-9_-]+/gi, '-').toLowerCase().slice(0, 60);
   $('error').hidden = true;
   $('pictureTools').hidden = false;
-  $('fixPicture').hidden = !canDraw();
+  $('fixPicture').hidden = $('cleanPicture').hidden = !canDraw();
+  beforeClean = null;
+  $('cleanPicture').textContent = 'Clean up with AI';
   $('creditText').hidden = !credit;
   $('creditText').textContent = credit ? 'Picture: ' + credit : '';
   cutout = null;
@@ -108,7 +110,8 @@ async function refreshCutout() {
     $('picked').src = cutout.url;
     hint.hidden = false;
     hint.innerHTML = '<b>This is what the AI will see.</b> Check that nothing is missing, like wheel bottoms hidden ' +
-      'in grass. Missing parts come out wrong, so if something is cut off, try a picture where the whole object shows.';
+      'in grass. Missing parts come out wrong, so if something is cut off, try a picture where the whole object shows.' +
+      (cutout.upscaled ? ' The picture was small, so it was sharpened 4× first.' : '');
     return updateButton();
   }
   const file = picked, ticket = ++cutting;
@@ -119,7 +122,7 @@ async function refreshCutout() {
   try {
     const r = await api('/api/cutout', { method: 'POST', body: file, headers: { 'Content-Type': file.type } });
     if (ticket !== cutting) return;  // a newer picture was picked meanwhile
-    cutout = { file, id: r.id, url: r.url };
+    cutout = { file, id: r.id, url: r.url, upscaled: r.upscaled };
   } catch (e) {
     if (ticket !== cutting) return;
     cutout = { file, failed: true };
@@ -443,6 +446,43 @@ $('crUse').addEventListener('click', async () => {
   pick(new File([blob], cr.name + '-part.png', { type: 'image/png' }), pickedCredit);
 });
 $('cropPicture').addEventListener('click', () => picked && openCropper(pickedUrl, $('name').value || 'model'));
+
+// ---------- clean up with AI ----------
+// The picture AI redraws the picture as a clean studio render of the same object. Screenshots and photos have
+// reflections, odd lighting and blur that TRELLIS.2 bakes into the model; a clean render gives a much cleaner model.
+const CLEAN_UP = 'Turn this into a clean, sharp, high-detail 3D render of exactly the same object, with the same ' +
+  'design, shape, parts and colors, the whole object in view. Plain light gray background, soft even studio ' +
+  'lighting, no reflections of the surroundings.';
+let beforeClean = null;  // the picture before a clean-up, so "Back to the original" can put it back
+const fileToDataUrl = (file) => new Promise((ok, fail) => {
+  const r = new FileReader();
+  r.onload = () => ok(r.result);
+  r.onerror = () => fail(new Error("Couldn't read the picture."));
+  r.readAsDataURL(file);
+});
+$('cleanPicture').addEventListener('click', async () => {
+  if (!picked) return;
+  if (beforeClean) {
+    const b = beforeClean;
+    pick(b.file, b.credit);
+    return;
+  }
+  const btn = $('cleanPicture'), file = picked, credit = pickedCredit, name = $('name').value || 'model';
+  btn.disabled = true;
+  $('error').hidden = true;
+  try {
+    const image = await fileToDataUrl(file);
+    const { id } = await api('/api/edit', { method: 'POST', body: JSON.stringify({ prompt: CLEAN_UP, image, mask: null, seed: -1 }) });
+    const r = await waitJob(id, (job) => { btn.textContent = job.step; });
+    pick(await urlToFile(r.image, name + '-clean.png'), credit);
+    beforeClean = { file, credit };
+    btn.textContent = 'Back to the original';
+  } catch (e) {
+    btn.textContent = 'Clean up with AI';
+    showError(e.message);
+  }
+  btn.disabled = false;
+});
 
 $('draw').addEventListener('click', async () => {
   const prompt = $('prompt').value.trim();

@@ -36,6 +36,9 @@ DOWNLOADS = [  # (url, where it goes)
      MODELS / "flux2-klein" / "Qwen3-4B-Q8_0.gguf"),
     ("https://huggingface.co/Comfy-Org/flux2-klein-4B/resolve/main/split_files/vae/flux2-vae.safetensors",
      MODELS / "flux2-klein" / "flux2-vae.safetensors"),
+    # sharpens small pictures 4x before 3D, BSD-3-Clause
+    ("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+     MODELS / "upscaler" / "RealESRGAN_x4plus.pth"),
 ]
 
 

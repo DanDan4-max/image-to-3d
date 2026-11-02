@@ -24,8 +24,36 @@ STEP = re.compile(r"\|\s*(\d+)/(\d+)")
 STEPS = 4  # FLUX.2 [klein] is distilled to draw in 4 steps
 
 
+UPSCALER = MODELS / "upscaler" / "RealESRGAN_x4plus.pth"  # Real-ESRGAN (Xintao Wang et al., BSD-3-Clause)
+SMALL = 768  # pictures smaller than this get upscaled before 3D: TRELLIS.2 looks at about 512 px of the object
+
+
 def available():
     return EXE.exists() and all((WEIGHTS / f).exists() for f in (DIFFUSION, TEXT, VAE))
+
+
+def upscale_if_small(picture, dest):
+    """Small pictures (like 256 px web thumbnails) make blurry, mushy models. Real-ESRGAN sharpens them 4x (about
+    2 s on the GPU); pictures that are already big enough, or a missing upscaler, leave the picture as it is.
+    Returns the picture to use."""
+    if not (EXE.exists() and UPSCALER.exists()):
+        return Path(picture)
+    with Image.open(picture) as img:
+        if max(img.size) >= SMALL:
+            return Path(picture)
+        rgba = "A" in img.getbands() or "transparency" in img.info
+        src = Path(dest).with_name(Path(dest).stem + "-in.png")
+        img.convert("RGBA" if rgba else "RGB").save(src)  # sd.cpp reads PNG/JPG, not WEBP
+    r = subprocess.run([str(EXE), "-M", "upscale", "--upscale-model", str(UPSCALER), "-i", str(src), "-o", str(dest)],
+                       cwd=str(EXE.parent), capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW)
+    src.unlink(missing_ok=True)
+    if r.returncode != 0 or not Path(dest).exists():
+        return Path(picture)  # upscaling is a bonus; carry on with the original
+    with Image.open(dest) as up:
+        if max(up.size) > 2048:  # 4x of a 700 px picture is more than the AIs use
+            up.thumbnail((2048, 2048), Image.LANCZOS)
+            up.save(dest)
+    return Path(dest)
 
 
 def _run(args, out, progress, text):
@@ -71,7 +99,12 @@ def edit(picture, mask, instruction, out, seed=-1, progress=None):
     With a mask, just the area around the highlight is redrawn, at full resolution, then blended back in with a
     soft edge, so small fixes get the AI's full attention and the rest of the picture stays exactly as it was."""
     progress = progress or (lambda t, f: None)
-    base = Image.open(picture).convert("RGB")
+    src = Image.open(picture)
+    if "A" in src.getbands() or "transparency" in src.info:  # see-through parts on plain light gray, not black
+        gray = Image.new("RGBA", src.size, (200, 200, 200, 255))
+        gray.alpha_composite(src.convert("RGBA"))
+        src = gray
+    base = src.convert("RGB")
     W, H = base.size
     m = None
     if mask is not None:
@@ -102,14 +135,17 @@ def edit(picture, mask, instruction, out, seed=-1, progress=None):
     try:
         _run(["-r", str(ref), "-p", instruction.strip(), "-W", str(tw), "-H", str(th), "-s", str(seed)],
              raw, progress, "Redrawing")
-        fixed = Image.open(raw).convert("RGB").resize((cw, ch), Image.LANCZOS)
+        drawn = Image.open(raw).convert("RGB")
+        drawn.load()
     finally:
         ref.unlink(missing_ok=True)
         raw.unlink(missing_ok=True)
 
     if m is None:
-        result = fixed.resize((W, H), Image.LANCZOS) if (cw, ch) != (W, H) else fixed
+        # the whole picture was redrawn: keep the AI's full resolution (it also sharpens small pictures)
+        result = drawn
     else:
+        fixed = drawn.resize((cw, ch), Image.LANCZOS)
         # grow the highlight a little and soften its edge so the fix blends in without a visible seam
         soft = m.crop(box).filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.GaussianBlur(max(3, cw // 80)))
         a = np.asarray(soft, np.float32)[..., None] / 255.0
